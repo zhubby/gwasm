@@ -1493,12 +1493,10 @@ def main():
     ap.add_argument("-c", "--cache", default=None, type=Path)
     ap.add_argument("-j", "--jobs", type=int, default=PREFETCH_JOBS,
                     help="concurrent chunk fetches, for every download this "
-                         "makes (default %d). Throughput scales almost linearly "
-                         "-- 8 gives ~3 MB/s, 16 ~7.5, 32 ~12 -- but this is "
-                         "ArenaNet's production CDN and the access key is shared "
-                         "by every install, so raising it is a decision about "
-                         "their infrastructure, not just yours."
-                         % PREFETCH_JOBS)
+                         "makes (default %d, maximum %d). The limit protects "
+                         "ArenaNet's production CDN because the access key is "
+                         "shared by every install."
+                         % (PREFETCH_JOBS, MAX_JOBS))
     ap.add_argument("--build", choices=["jspi", "asyncify", "both"], default="jspi",
                     help="jspi is 8.2MB and what Chrome picks; asyncify for Safari")
     ap.add_argument("--no-update", action="store_true", help="skip the update check")

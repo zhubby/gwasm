@@ -697,6 +697,12 @@ def test_install_check(tmp):
                        capture_output=True, text=True, timeout=60)
     check("a complete copy passes the check", r.returncode == 0, r.stderr[:120])
 
+    r = subprocess.run([sys.executable, "gw.py", "-j", str(gw.MAX_JOBS + 1),
+                        "--no-browser"], cwd=str(good),
+                       capture_output=True, text=True, timeout=60)
+    check("rejects excessive download concurrency", r.returncode == 2,
+          str(r.returncode))
+
 
 def main():
     import tempfile
