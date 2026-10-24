@@ -1171,7 +1171,8 @@ class Handler(SimpleHTTPRequestHandler):
         # SharedArrayBuffer, so cross-origin isolation is unnecessary.
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Security-Policy",
-                         "default-src 'self'; connect-src 'self' ws:; "
+                         "default-src 'self'; connect-src 'self' "
+                         "ws://127.0.0.1:* ws://localhost:*; "
                          "img-src 'self' data:; font-src 'self'; "
                          "script-src 'self'; style-src 'self'; object-src 'none'; "
                          "base-uri 'none'; frame-ancestors 'none'")
@@ -1278,14 +1279,18 @@ class Handler(SimpleHTTPRequestHandler):
         if not m:
             return None
         first, last = m.group(1), m.group(2)
-        if first:
-            start = int(first)
-            end = int(last) if last else total - 1
-        else:
-            if not last:  # suffix form: bytes=-N -> the final N bytes
-                return None
-            start = max(0, total - int(last))
-            end = total - 1
+        try:
+            if first:
+                start = int(first)
+                end = int(last) if last else total - 1
+            else:
+                if not last:  # suffix form: bytes=-N -> the final N bytes
+                    return None
+                start = max(0, total - int(last))
+                end = total - 1
+        except ValueError:
+            self.send_error(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+            return "invalid"
         if start >= total or start > end:
             self.send_error(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
             return "invalid"
@@ -1324,6 +1329,10 @@ class Handler(SimpleHTTPRequestHandler):
             url = "https://%s%s" % (host, rest)
 
         length = int(self.headers.get("Content-Length") or 0)
+        if length > 8 * 1024 * 1024:
+            self.send_error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                            "proxy request body is too large")
+            return True
         body = self.rfile.read(length) if length else None
         # Drop the headers describing the hop to us rather than the request.
         skip = {"host", "connection", "content-length", "accept-encoding",

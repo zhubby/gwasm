@@ -199,7 +199,7 @@ class Origin(BaseHTTPRequestHandler):
     do_GET = do_POST = _reply
 
 
-def serve(directory, port):
+def serve(directory, port=0):
     httpd = ThreadingHTTPServer(("127.0.0.1", port),
                                 partial(gw.Handler, directory=str(directory)))
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -230,9 +230,10 @@ def test_server(tmp):
 
     gw.Handler.store = gw.ChunkStore(index, None)  # offline: no fetching
     gw.Handler.proxy_http = gw.Http()
-    gw.Handler.origins = {"http://127.0.0.1:8199"}
-    httpd = serve(tmp, 8199)
-    base = "http://127.0.0.1:8199"
+    httpd = serve(tmp)
+    port = httpd.server_address[1]
+    gw.Handler.origins = {"http://127.0.0.1:%d" % port}
+    base = "http://127.0.0.1:%d" % port
 
     try:
         # -- mime and ranges on a real file
@@ -262,6 +263,8 @@ def test_server(tmp):
         check("snapshot short final chunk", s == 206 and b == truth[last:])
         s, _, _ = req(base + "/Gw.snapshot")
         check("snapshot whole-file refused", s == 416, str(s))
+        s, _, _ = req(base + "/Gw.snapshot", "bytes=not-a-range")
+        check("invalid range refused", s == 416, str(s))
 
         # -- a chunk that is not cached, with no session to fetch it
         truth2, index2 = build_snapshot(tmp / "partial", cached_only=False)
@@ -279,6 +282,9 @@ def test_server(tmp):
         s, _, b = req(base + "/webgate/post", method="POST", body=b"hello",
                       headers={"Content-Type": "text/plain"})
         check("proxy POST", s == 200 and json.loads(b)["method"] == "POST")
+        s, _, _ = req(base + "/webgate/post", method="POST",
+                      body=b"x" * (8 * 1024 * 1024 + 1))
+        check("oversized proxy body refused", s == 413, str(s))
         s, _, _ = req(base + "/webgate/denied")
         check("proxy passes upstream 401 through", s == 401, str(s))
 
@@ -301,21 +307,23 @@ def test_server(tmp):
                                 ("192.168.0.5:6112", "LAN", 403),
                                 ("8.8.8.8:22", "port not allowed", 403),
                                 ("8.8.8.8", "malformed dest", 400)):
-            check("ws deny %s" % why, ws_status(8199, dest) == want,
-                  str(ws_status(8199, dest)))
+            check("ws deny %s" % why, ws_status(port, dest) == want,
+                  str(ws_status(port, dest)))
         check("ws deny foreign origin",
-              ws_status(8199, "8.8.8.8:6112", origin="http://evil.example") == 403)
+              ws_status(port, "8.8.8.8:6112", origin="http://evil.example") == 403)
         check("ws deny missing origin",
-              ws_status(8199, "8.8.8.8:6112", origin=None) == 403)
+              ws_status(port, "8.8.8.8:6112", origin=None) == 403)
     finally:
         httpd.shutdown()
         origin.shutdown()
 
 
-def ws_status(port, dest, origin="http://127.0.0.1:8199"):
+def ws_status(port, dest, origin="auto"):
     s = socket.create_connection(("127.0.0.1", port), 10)
     try:
         key = base64.b64encode(os.urandom(16)).decode()
+        if origin == "auto":
+            origin = "http://127.0.0.1:%d" % port
         origin_header = "" if origin is None else "Origin: %s\r\n" % origin
         r = ("GET /?dest=%s HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nUpgrade: websocket\r\n"
              "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
