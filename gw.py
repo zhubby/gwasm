@@ -658,6 +658,7 @@ class ChunkStore:
         self.fetched = 0
         self._locks = {}
         self._guard = threading.Lock()
+        self._verified = {}
         # Which chunks a boot actually touches. Recorded so the next run can
         # fetch them up front in parallel instead of discovering them one
         # 650ms round trip at a time. ~1400 chunks, about 360 MB.
@@ -669,7 +670,7 @@ class ChunkStore:
         h = self.hashes[i]
         path = self.cache / h
         expected = expected_chunk_size(self.size, self.chunk_size, i)
-        if chunk_matches(path, h, expected):
+        if self._cached_chunk_ok(path, h, expected):
             return path
         if not self.http:
             raise FileNotFoundError("chunk %d (%s) not cached, and offline" % (i, h))
@@ -678,10 +679,11 @@ class ChunkStore:
         with self._guard:
             lock = self._locks.setdefault(h, threading.Lock())
         with lock:
-            if chunk_matches(path, h, expected):  # another thread won the race
+            if self._cached_chunk_ok(path, h, expected):  # another thread won the race
                 return path
             fetch_chunk(self.http, self.cache, h)
             self.fetched += 1
+            self._verified[h] = self._signature(path)
             # Per-chunk during a bulk run is 9500 lines that read as if work
             # were being repeated: the indices start mid-file, because earlier
             # chunks are already cached, and run backwards, because workers
@@ -689,6 +691,27 @@ class ChunkStore:
             if not self.quiet:
                 log("  snapshot: fetched chunk %d (%d this session)" % (i, self.fetched))
         return path
+
+    @staticmethod
+    def _signature(path):
+        try:
+            st = path.stat()
+            return st.st_size, st.st_mtime_ns
+        except OSError:
+            return None
+
+    def _cached_chunk_ok(self, path, h, expected):
+        signature = self._signature(path)
+        if signature is None or signature[0] != expected:
+            self._verified.pop(h, None)
+            return False
+        if self._verified.get(h) == signature:
+            return True
+        if chunk_matches(path, h, expected):
+            self._verified[h] = signature
+            return True
+        self._verified.pop(h, None)
+        return False
 
     @property
     def boot_list(self):

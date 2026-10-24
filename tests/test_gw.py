@@ -425,6 +425,16 @@ def test_lazy_fetch(tmp):
     check("corrupt cached chunk is refetched",
           store.read(0, 16) == truth[:16] and
           calls == [idx["chunkHashes"][0]], str(calls))
+    real_chunk_matches = gw.chunk_matches
+    hash_checks = [0]
+    gw.chunk_matches = lambda *args: (hash_checks.__setitem__(0, hash_checks[0] + 1)
+                                      or real_chunk_matches(*args))
+    try:
+        store.read(0, 16)
+    finally:
+        gw.chunk_matches = real_chunk_matches
+    check("verified cache avoids repeated hashing", hash_checks[0] == 0,
+          str(hash_checks[0]))
 
     # Concurrent readers of one uncached chunk must fetch it exactly once.
     calls.clear()
