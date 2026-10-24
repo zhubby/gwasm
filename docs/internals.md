@@ -150,6 +150,11 @@ list, so GLES is translated to WebGL by Emscripten's shim.
 
 ### Host interfaces
 
+The required browser host surface is also recorded in
+[host-contract.json](host-contract.json). The harness contract test checks the
+callable methods listed there; update the file when a new glue build introduces
+another import or changes a return shape.
+
 The glue reads platform services off `Module`. Implementing these is the whole
 job:
 
