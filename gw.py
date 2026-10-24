@@ -17,6 +17,7 @@ import argparse
 import base64
 import hashlib
 import http.client
+import ipaddress
 import json
 import mimetypes
 import os
@@ -938,38 +939,23 @@ CONNECT_TIMEOUT = 10
 ALLOW_PRIVATE = os.environ.get("GW_RELAY_ALLOW_PRIVATE") == "1"
 
 
-def is_public_ipv4(ip):
-    p = ip.split(".")
-    if len(p) != 4:
-        return False
+def is_public_ip(ip):
+    """Allow only globally routable unicast addresses.
+
+    The relay is a browser-reachable TCP dialer, so accepting an address merely
+    because it is syntactically valid is enough to turn it into a LAN scanner.
+    ipaddress keeps the special IPv6 ranges and IPv4-mapped addresses in one
+    place instead of duplicating an incomplete list of prefixes.
+    """
     try:
-        a, b, c, d = (int(x) for x in p)
+        addr = ipaddress.ip_address(ip)
     except ValueError:
         return False
-    if not all(0 <= n <= 255 for n in (a, b, c, d)):
+    if addr.version == 6 and addr.ipv4_mapped:
+        return is_public_ip(str(addr.ipv4_mapped))
+    if addr.version == 4 and addr in ipaddress.ip_network("192.0.0.0/24"):
         return False
-    if a == 0: return False                          # 0.0.0.0/8, and the geodc sentinel
-    if a == 10: return False                         # RFC1918
-    if a == 127: return False                        # loopback
-    if a == 169 and b == 254: return False           # link-local, incl. cloud metadata
-    if a == 172 and 16 <= b <= 31: return False      # RFC1918
-    if a == 192 and b == 168: return False           # RFC1918
-    if a == 100 and 64 <= b <= 127: return False     # CGNAT
-    if a == 192 and b == 0: return False             # IETF protocol assignments
-    if a >= 224: return False                        # multicast and reserved
-    return True
-
-
-def is_public_ip(ip):
-    if ":" not in ip:
-        return is_public_ipv4(ip)
-    h = ip.lower()
-    if h in ("::1", "::"):
-        return False
-    if re.match(r"^f[cd]", h): return False          # unique local
-    if re.match(r"^fe[89ab]", h): return False       # link-local
-    m = re.search(r"(\d+\.\d+\.\d+\.\d+)$", h)       # ::ffff:a.b.c.d
-    return is_public_ipv4(m.group(1)) if m else True
+    return addr.is_global and not addr.is_multicast
 
 
 # ---- RFC 6455 framing -----------------------------------------------------
@@ -977,6 +963,7 @@ def is_public_ip(ip):
 # frames in, no fragmentation on the write side.
 
 WS_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+MAX_WS_FRAME = 16 * 1024 * 1024
 
 
 def frame(payload, opcode=0x2):
@@ -994,8 +981,17 @@ def unframe(buf):
     """Returns (opcode, payload, rest) or None if more bytes are needed."""
     if len(buf) < 2:
         return None
-    opcode = buf[0] & 0x0F
+    first = buf[0]
+    if first & 0x70:
+        raise ValueError("WebSocket RSV bits are not supported")
+    if not first & 0x80:
+        raise ValueError("fragmented WebSocket messages are not supported")
+    opcode = first & 0x0F
+    if opcode not in (0x1, 0x2, 0x8, 0x9, 0xA):
+        raise ValueError("unsupported WebSocket opcode %d" % opcode)
     masked = bool(buf[1] & 0x80)
+    if not masked:
+        raise ValueError("client WebSocket frames must be masked")
     n = buf[1] & 0x7F
     off = 2
     if n == 126:
@@ -1006,17 +1002,21 @@ def unframe(buf):
         if len(buf) < off + 8:
             return None
         n = struct.unpack("!Q", buf[off:off + 8])[0]; off += 8
+        if n & (1 << 63):
+            raise ValueError("invalid WebSocket frame length")
+    if n > MAX_WS_FRAME:
+        raise ValueError("WebSocket frame exceeds limit")
+    if opcode >= 0x8 and (n > 125 or not first & 0x80):
+        raise ValueError("invalid WebSocket control frame")
     mask = None
-    if masked:
-        if len(buf) < off + 4:
-            return None
-        mask = buf[off:off + 4]; off += 4
+    if len(buf) < off + 4:
+        return None
+    mask = buf[off:off + 4]; off += 4
     if len(buf) < off + n:
         return None
     payload = bytearray(buf[off:off + n])
-    if mask:
-        for i in range(n):
-            payload[i] ^= mask[i & 3]
+    for i in range(n):
+        payload[i] ^= mask[i & 3]
     return opcode, bytes(payload), buf[off + n:]
 
 
@@ -1058,7 +1058,9 @@ def bridge(sock, tcp, label):
                     elif opcode in (0x1, 0x2):
                         out += len(payload)
                         tcp.sendall(payload)
-    except OSError:
+    except (OSError, ValueError) as e:
+        if isinstance(e, ValueError):
+            log("relay protocol error %s: %s" % (label, e))
         pass
     finally:
         log("close %s -- %dB sent, %dB received, %dms"
@@ -1137,7 +1139,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _websocket(self, query):
         origin = self.headers.get("Origin")
-        if origin and origin not in self.origins:
+        if origin not in self.origins:
             return self._bail(403, "origin %s" % origin)
 
         dest = query.get("dest", [""])[0]

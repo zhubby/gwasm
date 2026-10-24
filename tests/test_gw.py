@@ -67,6 +67,21 @@ def test_framing():
     got = gw.unframe(masked(a) + masked(b))
     check("coalesced frames", got and got[1] == a and gw.unframe(got[2])[1] == b)
 
+    def rejects(frame):
+        try:
+            gw.unframe(frame)
+        except ValueError:
+            return True
+        return False
+
+    check("rejects unmasked client frame", rejects(gw.frame(b"x")))
+    check("rejects fragmented frame", rejects(bytes([0x02, 0x80, 0, 0, 0, 0])))
+    check("rejects RSV bits", rejects(bytes([0xC2, 0x80, 0, 0, 0, 0])))
+    check("rejects oversized frame", rejects(
+        bytes([0x82, 0xFF]) + struct.pack("!Q", gw.MAX_WS_FRAME + 1)))
+    check("rejects oversized control frame", rejects(
+        bytes([0x89, 0xFE, 0, 126, 0, 0, 0, 0])))
+
 
 # ---- allowlists -----------------------------------------------------------
 
@@ -81,8 +96,8 @@ def test_allowlists():
 
     for ip in ("127.0.0.1", "10.0.0.1", "169.254.169.254", "172.16.0.1",
                "172.31.255.255", "192.168.1.1", "100.64.0.1", "0.0.1.2",
-               "224.0.0.1", "255.255.255.255", "::1", "fe80::1", "fc00::1",
-               "::ffff:127.0.0.1", "not.an.ip", "1.2.3"):
+               "224.0.0.1", "255.255.255.255", "::1", "::", "fe80::1", "fc00::1",
+               "ff02::1", "2001:db8::1", "::ffff:127.0.0.1", "not.an.ip", "1.2.3"):
         check("not dialable %s" % ip, not gw.is_public_ip(ip))
     # 172.15 and 172.32 sit just outside RFC1918 and must not be caught by it.
     for ip in ("8.8.8.8", "54.196.189.234", "172.15.0.1", "172.32.0.1",
@@ -287,6 +302,8 @@ def test_server(tmp):
                   str(ws_status(8199, dest)))
         check("ws deny foreign origin",
               ws_status(8199, "8.8.8.8:6112", origin="http://evil.example") == 403)
+        check("ws deny missing origin",
+              ws_status(8199, "8.8.8.8:6112", origin=None) == 403)
     finally:
         httpd.shutdown()
         origin.shutdown()
@@ -296,9 +313,10 @@ def ws_status(port, dest, origin="http://127.0.0.1:8199"):
     s = socket.create_connection(("127.0.0.1", port), 10)
     try:
         key = base64.b64encode(os.urandom(16)).decode()
+        origin_header = "" if origin is None else "Origin: %s\r\n" % origin
         r = ("GET /?dest=%s HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nUpgrade: websocket\r\n"
              "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
-             "Sec-WebSocket-Version: 13\r\nOrigin: %s\r\n\r\n" % (dest, port, key, origin))
+             "Sec-WebSocket-Version: 13\r\n%s\r\n" % (dest, port, key, origin_header))
         s.sendall(r.encode())
         head = b""
         while b"\r\n" not in head:
