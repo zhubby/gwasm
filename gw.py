@@ -411,11 +411,56 @@ def fetch_chunk(http_, cache, h, compression="none"):
         import gzip
         data = gzip.decompress(data)
     algo = _HASHES.get(len(h))
-    if algo and hashlib.new(algo, data).hexdigest() != h.lower():
+    if not algo:
+        raise ValueError("unsupported chunk hash %s" % h)
+    if hashlib.new(algo, data).hexdigest() != h.lower():
         raise ValueError("hash mismatch on chunk %s" % h)
     cache.mkdir(parents=True, exist_ok=True)
     store_chunk(cache, h, data)
     return data
+
+
+def expected_chunk_size(size, chunk_size, i):
+    return min(chunk_size, size - i * chunk_size)
+
+
+def chunk_matches(path, h, expected_size):
+    """Return whether a cached chunk is complete and matches its content hash."""
+    algo = _HASHES.get(len(h))
+    if not path.is_file() or not algo:
+        return False
+    try:
+        if path.stat().st_size != expected_size:
+            return False
+        digest = hashlib.new(algo)
+        with path.open("rb") as fh:
+            for block in iter(lambda: fh.read(1024 * 1024), b""):
+                digest.update(block)
+        return digest.hexdigest() == h.lower()
+    except OSError:
+        return False
+
+
+def file_matches(path, entry, chunk_size):
+    """Check a materialized file against the manifest's chunk hashes."""
+    try:
+        if not path.is_file() or path.stat().st_size != entry["size"]:
+            return False
+        hashes = entry["chunkHashes"]
+        with path.open("rb") as fh:
+            for i, h in enumerate(hashes):
+                expected = expected_chunk_size(entry["size"], chunk_size, i)
+                data = fh.read(expected)
+                if len(data) != expected or not chunk_matches_bytes(data, h):
+                    return False
+            return fh.read(1) == b""
+    except OSError:
+        return False
+
+
+def chunk_matches_bytes(data, h):
+    algo = _HASHES.get(len(h))
+    return bool(algo and hashlib.new(algo, data).hexdigest() == h.lower())
 
 
 class Progress:
@@ -491,18 +536,21 @@ def update(dest, cache, build, jobs=4, progress=None):
             continue
         entry = mf.files[path]
         out = dest / name
-        if not (out.exists() and out.stat().st_size == entry["size"]):
+        if not file_matches(out, entry, mf.chunk_size):
             wanted.append((name, entry, out))
 
     # Size the whole job before starting any of it: a bar that resets to zero
     # at each file is worse than no bar. The final chunk of a file is short,
     # so take its size from the file rather than assuming chunkSize.
     def chunk_bytes(entry, i):
-        return min(mf.chunk_size, entry["size"] - i * mf.chunk_size)
+        return expected_chunk_size(entry["size"], mf.chunk_size, i)
 
-    todo = [(h, chunk_bytes(e, i)) for _, e, _ in wanted
-            for i, h in enumerate(e["chunkHashes"]) if not (cache / h).exists()]
-    total = sum(n for _, n in todo)
+    todo = {}
+    for _, entry, _ in wanted:
+        for i, h in enumerate(entry["chunkHashes"]):
+            if not chunk_matches(cache / h, h, chunk_bytes(entry, i)):
+                todo.setdefault(h, chunk_bytes(entry, i))
+    total = sum(todo.values())
     if progress and total:
         progress.set(phase="client", label="Downloading Guild Wars…",
                      received=0, total=total)
@@ -512,7 +560,8 @@ def update(dest, cache, build, jobs=4, progress=None):
 
     for name, entry, out in wanted:
         hashes = entry["chunkHashes"]
-        missing = sorted({h for h in hashes if not (cache / h).exists()})
+        missing = sorted({h for i, h in enumerate(hashes)
+                          if not chunk_matches(cache / h, h, chunk_bytes(entry, i))})
         log("  %s: %.1f MB, %d chunks (%d to fetch)"
             % (name, entry["size"] / 1e6, len(hashes), len(missing)))
         if missing:
@@ -579,7 +628,8 @@ class ChunkStore:
     def _ensure(self, i):
         h = self.hashes[i]
         path = self.cache / h
-        if path.exists():
+        expected = expected_chunk_size(self.size, self.chunk_size, i)
+        if chunk_matches(path, h, expected):
             return path
         if not self.http:
             raise FileNotFoundError("chunk %d (%s) not cached, and offline" % (i, h))
@@ -588,7 +638,7 @@ class ChunkStore:
         with self._guard:
             lock = self._locks.setdefault(h, threading.Lock())
         with lock:
-            if path.exists():  # another thread won the race
+            if chunk_matches(path, h, expected):  # another thread won the race
                 return path
             fetch_chunk(self.http, self.cache, h)
             self.fetched += 1
@@ -639,7 +689,8 @@ class ChunkStore:
         except Exception:
             return  # nothing recorded yet; this run is the one doing the recording
         todo = [i for i in want if i < len(self.hashes)
-                and not (self.cache / self.hashes[i]).exists()]
+                and not chunk_matches(self.cache / self.hashes[i], self.hashes[i],
+                                      expected_chunk_size(self.size, self.chunk_size, i))]
         if not todo:
             return
 
@@ -676,7 +727,8 @@ class ChunkStore:
         up where it stopped and a later game update refetches only what changed.
         """
         todo = [i for i, h in enumerate(self.hashes)
-                if not (self.cache / h).exists()]
+                if not chunk_matches(self.cache / h, h,
+                                     expected_chunk_size(self.size, self.chunk_size, i))]
         total = self.size
         have = len(self.hashes) - len(todo)
         got = [have * self.chunk_size]
@@ -709,7 +761,7 @@ class ChunkStore:
         def grab(i):
             if stop.is_set():
                 return
-            size = min(self.chunk_size, self.size - i * self.chunk_size)
+            size = expected_chunk_size(self.size, self.chunk_size, i)
             try:
                 self._ensure(i)
             except Exception as e:

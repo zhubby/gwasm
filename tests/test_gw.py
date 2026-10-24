@@ -358,6 +358,14 @@ def test_lazy_fetch(tmp):
     store.read(CHUNK, 16)
     check("second read uses the cache", calls == [], str(calls))
 
+    # Presence alone is not enough: a truncated or modified entry must be
+    # treated as a miss and repaired from the CDN.
+    (cache / idx["chunkHashes"][0]).write_bytes(b"corrupt")
+    calls.clear()
+    check("corrupt cached chunk is refetched",
+          store.read(0, 16) == truth[:16] and
+          calls == [idx["chunkHashes"][0]], str(calls))
+
     # Concurrent readers of one uncached chunk must fetch it exactly once.
     calls.clear()
     store2 = gw.ChunkStore(index, FakeHttp())
@@ -380,6 +388,15 @@ def test_lazy_fetch(tmp):
     except ValueError:
         check("hash mismatch refused", True)
     check("bad chunk not cached", not (cache / fake_hash).exists())
+
+    entry = {"size": len(truth), "chunkHashes": idx["chunkHashes"]}
+    materialized = tmp / "materialized.bin"
+    materialized.write_bytes(truth)
+    check("manifest-matched file is accepted",
+          gw.file_matches(materialized, entry, CHUNK))
+    materialized.write_bytes(b"x" * len(truth))
+    check("same-size changed file is rejected",
+          not gw.file_matches(materialized, entry, CHUNK))
 
 
 def test_boot_recording(tmp):
