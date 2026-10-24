@@ -1233,6 +1233,13 @@ class Handler(SimpleHTTPRequestHandler):
         key = self.headers.get("Sec-WebSocket-Key")
         if not key:
             return self._bail(400, "no Sec-WebSocket-Key")
+        if self.headers.get("Sec-WebSocket-Version") != "13":
+            return self._bail(400, "unsupported WebSocket version")
+        try:
+            if len(base64.b64decode(key, validate=True)) != 16:
+                raise ValueError
+        except (ValueError, base64.binascii.Error):
+            return self._bail(400, "invalid Sec-WebSocket-Key")
 
         # Connect TCP *before* completing the upgrade.
         #

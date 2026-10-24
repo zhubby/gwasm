@@ -316,12 +316,14 @@ def test_server(tmp):
               ws_status(port, "8.8.8.8:6112", origin="http://evil.example") == 403)
         check("ws deny missing origin",
               ws_status(port, "8.8.8.8:6112", origin=None) == 403)
+        check("ws deny unsupported version",
+              ws_status(port, "8.8.8.8:6112", version="12") == 400)
     finally:
         httpd.shutdown()
         origin.shutdown()
 
 
-def ws_status(port, dest, origin="auto"):
+def ws_status(port, dest, origin="auto", version="13"):
     s = socket.create_connection(("127.0.0.1", port), 10)
     try:
         key = base64.b64encode(os.urandom(16)).decode()
@@ -330,7 +332,8 @@ def ws_status(port, dest, origin="auto"):
         origin_header = "" if origin is None else "Origin: %s\r\n" % origin
         r = ("GET /?dest=%s HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nUpgrade: websocket\r\n"
              "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
-             "Sec-WebSocket-Version: 13\r\n%s\r\n" % (dest, port, key, origin_header))
+             "Sec-WebSocket-Version: %s\r\n%s\r\n" %
+             (dest, port, key, version, origin_header))
         s.sendall(r.encode())
         head = b""
         while b"\r\n" not in head:
