@@ -81,7 +81,7 @@ jobs:
 
       - name: Install a browser
         run: |
-          npm install --no-audit --no-fund --no-package-lock
+          npm ci --ignore-scripts --no-audit --no-fund
           ./node_modules/.bin/playwright install --with-deps chromium
 
       # Drives the real harness against local fixtures. It reaches nothing of
