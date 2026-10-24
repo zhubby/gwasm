@@ -25,8 +25,6 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 const REPO = path.join(__dirname, '..');
-const HTTP_PORT = 8110;
-const FIXTURE_PORT = 8112;
 const CHUNK = 4096;
 
 // playwright-core pins a browser build number and refuses anything else, but
@@ -59,7 +57,7 @@ const check = (name, cond, extra = '') => {
 const CLIENT_HELLO = Buffer.from('HELLO-FROM-WASM');
 const SERVER_REPLY = Buffer.from('WELCOME-TO-TYRIA');
 
-function makeFixtureDirs() {
+function makeFixtureDirs(fixturePort) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gw_in_browser-e2e-'));
   const dist = path.join(tmp, 'dist');
   const cache = path.join(tmp, 'cache');
@@ -94,8 +92,8 @@ function makeFixtureDirs() {
   // is JSPI. Both builds ship with the same output basename, so Gw.jspi.js
   // also asks for "Gw.wasm"; locateFile has to redirect it, or the JSPI glue
   // silently pairs with the Asyncify binary whenever both are present.
-  fs.writeFileSync(path.join(dist, 'Gw.js'), MOCK_GLUE);
-  fs.writeFileSync(path.join(dist, 'Gw.jspi.js'), MOCK_GLUE);
+  fs.writeFileSync(path.join(dist, 'Gw.js'), MOCK_GLUE(fixturePort));
+  fs.writeFileSync(path.join(dist, 'Gw.jspi.js'), MOCK_GLUE(fixturePort));
   const stubWasm = Buffer.from([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0]);
   fs.writeFileSync(path.join(dist, 'Gw.wasm'), stubWasm);
   fs.writeFileSync(path.join(dist, 'Gw.jspi.wasm'), stubWasm);
@@ -105,7 +103,7 @@ function makeFixtureDirs() {
 
 // Stands in for the real Emscripten glue: adopts Module the same way, then
 // drives the services the harness provides and records what came back.
-const MOCK_GLUE = `
+const MOCK_GLUE = (fixturePort) => `
 var Module = typeof Module != 'undefined' ? Module : {};
 window.__e2e = { adopted: !!Module.image, steps: [], errors: [] };
 const E = window.__e2e;
@@ -200,7 +198,7 @@ Module.HEAPU8 = new Uint8Array(1 << 20);
     const ip = await Module.dns.resolve('localhost');
     note('dns', ip);
 
-    const sock = Module.socket.connect(ip + ':${FIXTURE_PORT}');
+    const sock = Module.socket.connect(ip + ':${fixturePort}');
     await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('socket timeout')), 8000);
       sock.onopen = () => { note('onopen'); sock.send(new Uint8Array(${JSON.stringify([...CLIENT_HELLO])})); };
@@ -258,7 +256,7 @@ function startFixtureServer() {
       });
       sock.on('error', () => {});
     });
-    srv.listen(FIXTURE_PORT, '127.0.0.1', () => resolve(srv));
+    srv.listen(0, '127.0.0.1', () => resolve(srv));
   });
 }
 
@@ -277,13 +275,14 @@ function waitFor(pred, timeout = 20000) {
 
 (async () => {
   const { chromium } = require('playwright-core');
-  const { tmp, dist, size } = makeFixtureDirs();
   const fixture = await startFixtureServer();
+  const fixturePort = fixture.address().port;
+  const { tmp, dist, size } = makeFixtureDirs(fixturePort);
 
   // localhost resolves through /etc/hosts, so this also confirms the relay
   // uses getaddrinfo -- a raw DNS query would not see it.
   const server = spawn('python3', [
-    path.join(REPO, 'gw.py'), '-d', dist, '-p', String(HTTP_PORT),
+    path.join(REPO, 'gw.py'), '-d', dist, '-p', '0',
     '--no-browser', '--offline', '--no-update',
   ], {
     // The fixture lives on loopback, which the address rule exists to forbid,
@@ -291,7 +290,7 @@ function waitFor(pred, timeout = 20000) {
     env: {
       ...process.env,
       GW_RELAY_DOMAINS: 'localhost',
-      GW_RELAY_PORTS: String(FIXTURE_PORT),
+      GW_RELAY_PORTS: String(fixturePort),
       GW_RELAY_ALLOW_PRIVATE: '1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -301,8 +300,12 @@ function waitFor(pred, timeout = 20000) {
   server.stdout.on('data', (d) => serverLog.push(String(d)));
   server.stderr.on('data', (d) => serverLog.push(String(d)));
 
+  let httpPort = null;
   const up = await waitFor(() => new Promise((r) => {
-    http.get({ host: '127.0.0.1', port: HTTP_PORT, path: '/index.html' },
+    const m = serverLog.join('').match(/at http:\/\/127\.0\.0\.1:(\d+)\//);
+    if (!m) return r(false);
+    httpPort = Number(m[1]);
+    http.get({ host: '127.0.0.1', port: httpPort, path: '/index.html' },
              (res) => r(res.statusCode === 200)).on('error', () => r(false));
   }));
   check('gw.py serving', up);
@@ -321,7 +324,7 @@ function waitFor(pred, timeout = 20000) {
     page.on('console', (m) => consoleLines.push(m.text()));
     page.on('pageerror', (e) => consoleLines.push('PAGEERROR: ' + e.message));
 
-    await page.goto(`http://127.0.0.1:${HTTP_PORT}/`, { waitUntil: 'load' });
+    await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'load' });
 
     const finished = await waitFor(() => page.evaluate(() => window.__e2e && window.__e2e.done));
     const e2e = await page.evaluate(() => window.__e2e || null);

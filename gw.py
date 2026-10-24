@@ -1511,15 +1511,15 @@ def main():
                 except OSError:
                     pass
 
-    Handler.proxy_http = Http()
-    Handler.origins = {"http://127.0.0.1:%d" % args.port,
-                       "http://localhost:%d" % args.port}
-
     # Threaded: the module issues concurrent reads and a serial server
     # deadlocks -- and each relayed socket holds a thread for its lifetime.
     httpd = GWServer(("127.0.0.1", args.port),
                      partial(Handler, directory=str(dest)))
-    url = "http://127.0.0.1:%d/" % args.port
+    actual_port = httpd.server_address[1]
+    Handler.proxy_http = Http()
+    Handler.origins = {"http://127.0.0.1:%d" % actual_port,
+                       "http://localhost:%d" % actual_port}
+    url = "http://127.0.0.1:%d/" % actual_port
     log("serving %s at %s" % (dest, url))
     log("relay: same origin, domains %s, ports %s"
         % (", ".join(ALLOWED_DOMAINS), ", ".join(str(p) for p in sorted(ALLOWED_PORTS))))
