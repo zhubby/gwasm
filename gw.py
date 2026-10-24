@@ -1300,7 +1300,8 @@ class Handler(SimpleHTTPRequestHandler):
             return None
         m = RANGE_RE.match(header.strip())
         if not m:
-            return None
+            self.send_error(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+            return "invalid"
         first, last = m.group(1), m.group(2)
         try:
             if first:
@@ -1351,7 +1352,14 @@ class Handler(SimpleHTTPRequestHandler):
                 return True
             url = "https://%s%s" % (host, rest)
 
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self.send_error(HTTPStatus.BAD_REQUEST, "invalid Content-Length")
+            return True
+        if length < 0:
+            self.send_error(HTTPStatus.BAD_REQUEST, "invalid Content-Length")
+            return True
         if length > 8 * 1024 * 1024:
             self.send_error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
                             "proxy request body is too large")
@@ -1387,7 +1395,12 @@ class Handler(SimpleHTTPRequestHandler):
         from urllib.parse import urlparse, parse_qs
         parts = urlparse(self.path)
         if parts.path == "/ping":
-            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                return self.send_error(HTTPStatus.BAD_REQUEST, "invalid Content-Length")
+            if length < 0:
+                return self.send_error(HTTPStatus.BAD_REQUEST, "invalid Content-Length")
             if length:
                 self.rfile.read(length)
             return self._ping(parse_qs(parts.query))

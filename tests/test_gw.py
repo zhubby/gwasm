@@ -285,6 +285,9 @@ def test_server(tmp):
         s, _, _ = req(base + "/webgate/post", method="POST",
                       body=b"x" * (8 * 1024 * 1024 + 1))
         check("oversized proxy body refused", s == 413, str(s))
+        s, _, _ = req(base + "/webgate/post", method="POST", body=b"hello",
+                      headers={"Content-Length": "invalid"})
+        check("invalid proxy content length refused", s == 400, str(s))
         s, _, _ = req(base + "/webgate/denied")
         check("proxy passes upstream 401 through", s == 401, str(s))
 
