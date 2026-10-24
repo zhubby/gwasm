@@ -474,6 +474,13 @@ def test_boot_recording(tmp):
           sorted(calls) == sorted([idx["chunkHashes"][0], idx["chunkHashes"][2]]),
           str(len(calls)))
 
+    for h in idx["chunkHashes"]:
+        (cache / h).unlink(missing_ok=True)
+    calls.clear()
+    cancelled = threading.Event(); cancelled.set()
+    store3.prefetch(gw.Progress(), jobs=2, stop=cancelled)
+    check("prefetch honours cancellation", calls == [], str(calls))
+
     # Offline must not attempt any of this.
     calls.clear()
     gw.ChunkStore(index, None).prefetch(gw.Progress())

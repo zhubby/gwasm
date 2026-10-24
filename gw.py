@@ -524,10 +524,11 @@ def copy_art(src, dest):
     }))
 
 
-def update(dest, cache, build, jobs=4, progress=None):
+def update(dest, cache, build, jobs=4, progress=None, stop=None):
     """Fetch any client file that is missing or the wrong size, and write the
     snapshot's chunk index so the server can serve it without assembling it."""
     http_ = patch_http()
+    stop = stop or threading.Event()
     log("checking for updates ...")
     mf = Manifest(json.loads(http_.get(PATCH_ROOT + "/manifest.json")))
 
@@ -574,6 +575,8 @@ def update(dest, cache, build, jobs=4, progress=None):
         if missing:
             sizes = {h: chunk_bytes(entry, i) for i, h in enumerate(hashes)}
             def grab(h):
+                if stop.is_set():
+                    return
                 fetch_chunk(http_, cache, h, mf.compression)
                 with got_lock:
                     got[0] += sizes[h]
@@ -585,6 +588,8 @@ def update(dest, cache, build, jobs=4, progress=None):
             with ThreadPoolExecutor(max_workers=jobs) as pool:
                 list(pool.map(grab, missing))
             print()
+            if stop.is_set():
+                return
 
         if progress:
             progress.set(label="Assembling %s…" % name)
@@ -680,7 +685,7 @@ class ChunkStore:
             os.replace(tmp, self.boot_list)
         self._touched_dirty = False
 
-    def prefetch(self, progress, jobs=PREFETCH_JOBS):
+    def prefetch(self, progress, jobs=PREFETCH_JOBS, stop=None):
         """Warm the recorded working set in the background.
 
         Concurrency is capped deliberately. Single-stream is latency-bound at
@@ -691,6 +696,7 @@ class ChunkStore:
         """
         if not self.http:
             return
+        stop = stop or threading.Event()
         try:
             want = json.loads(self.boot_list.read_text())["chunks"]
         except Exception:
@@ -708,6 +714,8 @@ class ChunkStore:
         progress.set(prefetch={"done": 0, "total": total})
 
         def grab(i):
+            if stop.is_set():
+                return
             try:
                 self._ensure(i)
             except Exception:
@@ -1382,6 +1390,11 @@ class Handler(SimpleHTTPRequestHandler):
         super().do_GET()
 
 
+class GWServer(ThreadingHTTPServer):
+    daemon_threads = True
+    block_on_close = False
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1448,7 +1461,9 @@ def main():
         """
         try:
             if not args.no_update and not args.offline:
-                update(dest, cache, args.build, args.jobs, progress)
+                update(dest, cache, args.build, args.jobs, progress, stop)
+            if stop.is_set():
+                return
         except Exception as e:
             log("update failed: %s" % e)
             if not any(dest.glob("Gw*")):
@@ -1482,14 +1497,13 @@ def main():
         # Only now: the page can boot while this runs, and every chunk warmed
         # here is one the game does not have to wait on a round trip for.
         # After --image there is nothing left to warm, so this is a no-op.
-        if store and not args.no_prefetch:
-            store.prefetch(progress, args.jobs)
+        if store and not args.no_prefetch and not stop.is_set():
+            store.prefetch(progress, args.jobs, stop)
 
     def record():
         """Persist the working set periodically, so a run that is killed rather
         than closed still leaves a usable list behind."""
-        while True:
-            time.sleep(10)
+        while not stop.wait(10):
             store = Handler.store
             if store:
                 try:
@@ -1503,8 +1517,8 @@ def main():
 
     # Threaded: the module issues concurrent reads and a serial server
     # deadlocks -- and each relayed socket holds a thread for its lifetime.
-    httpd = ThreadingHTTPServer(("127.0.0.1", args.port),
-                                partial(Handler, directory=str(dest)))
+    httpd = GWServer(("127.0.0.1", args.port),
+                     partial(Handler, directory=str(dest)))
     url = "http://127.0.0.1:%d/" % args.port
     log("serving %s at %s" % (dest, url))
     log("relay: same origin, domains %s, ports %s"
@@ -1538,6 +1552,7 @@ def main():
         stop.set()
         print("\nstopped" + (" -- rerun to resume the image download" if args.image else ""))
     finally:
+        stop.set()
         httpd.server_close()
         if Handler.store:
             Handler.store.save_touched()
