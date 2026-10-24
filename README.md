@@ -107,30 +107,23 @@ You only need these to change a default or work around a problem.
 | `--offline` | never download; use only what is already on disk |
 | `--no-update` | skip the check for a newer game version |
 | `--build asyncify` | the build for Safari and iOS (27.8 MB rather than 8.2 MB) |
-| `-j 16` | download with more threads — see below |
+| `-j 1..8` | choose download concurrency; 8 is the enforced maximum |
 | `-v` | log every request, for diagnosing a problem |
 
 Run `python3 gw.py --help` for the full list.
 
 ### Downloading faster
 
-Downloads are limited by round-trip time, not bandwidth, so more threads means
-almost proportionally more speed:
+Downloads are limited by round-trip time, not bandwidth. The launcher uses
+eight workers by default, and also enforces eight as the maximum:
 
 | `-j` | speed | 4.2 GB takes |
 |---|---|---|
-| 8 (default) | ~3 MB/s | ~20 min |
-| 16 | ~7 MB/s | ~9 min |
-| 32 | ~12 MB/s | ~6 min |
+| 8 (default and maximum) | ~3 MB/s | ~20 min |
 
-```bash
-python3 gw.py --image -j 16
-```
-
-**Please think before raising this much.** These are ArenaNet's real servers,
-and everyone using this shares one access key — so if that key gets
-rate-limited, patching breaks for actual paying players, not just for us. 8 is
-the default for that reason, and 16 is already a favour being asked.
+There is no supported setting above 8. These are ArenaNet's real servers, and
+everyone using this shares one access key — so a per-user burst can get the key
+rate-limited for actual paying players, not just for us.
 
 ## Where it puts things
 

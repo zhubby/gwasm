@@ -350,6 +350,19 @@ def test_manifest():
     except ValueError:
         check("manifest rejects unknown compression", True)
 
+    for jobs in (1, gw.MAX_JOBS):
+        try:
+            gw.validate_jobs(jobs)
+            check("download jobs accepts %d" % jobs, True)
+        except ValueError:
+            check("download jobs accepts %d" % jobs, False)
+    for jobs in (0, gw.MAX_JOBS + 1):
+        try:
+            gw.validate_jobs(jobs)
+            check("download jobs rejects %d" % jobs, False)
+        except ValueError:
+            check("download jobs rejects %d" % jobs, True)
+
 
 def test_lazy_fetch(tmp):
     """A chunk that is not cached must be fetched once, verified, and kept."""

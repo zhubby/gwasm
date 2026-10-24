@@ -110,7 +110,8 @@ See `chunkBytes()` in `harness/harness.js`.
 ### Snapshot reads are latency-bound, not bandwidth-bound
 
 Each 256 KB chunk costs ~650 ms from the CDN, so throughput scales almost
-linearly with concurrency. `PREFETCH_JOBS` is capped at 8 on purpose; see
+linearly with concurrency. `PREFETCH_JOBS` and CLI download concurrency are
+capped at 8 on purpose; see
 **Conduct** below before raising it.
 
 ### Browsers throttle hidden tabs
@@ -199,9 +200,10 @@ This talks to ArenaNet's production infrastructure, and `ACCESS_KEY` is shared
 by every install. That makes download concurrency a decision about *their*
 service rather than about one user's patience:
 
-- **Keep `PREFETCH_JOBS` at 8.** Throughput does scale — 16 gives ~7.5 MB/s and
-  32 gives ~12 — but a per-user burst is really every install at once, and a
-  rate-limited key breaks patching for people who are paying to play the game.
+- **Keep download concurrency at 8 or below.** Throughput does scale, but a
+  per-user burst is really every install at once, and a rate-limited key breaks
+  patching for people who are paying to play the game. The launcher enforces
+  this ceiling.
 - **Identify honestly and back off.** The `User-Agent` says what this is;
   retries are exponential.
 - **Pointing the relay at live game servers is a separate decision** from

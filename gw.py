@@ -64,6 +64,7 @@ COMMON = ["version.json"]
 # ArenaNet's production CDN and ACCESS_KEY is shared by every install, so a
 # per-user burst is really every install at once. See "Conduct" in CLAUDE.md.
 PREFETCH_JOBS = 8
+MAX_JOBS = 8
 
 VERBOSE = False   # -v; routine request logging is off by default
 
@@ -355,6 +356,11 @@ class HttpError(Exception):
     def __init__(self, status, what):
         super().__init__("HTTP %d for %s" % (status, what))
         self.status = status
+
+
+def validate_jobs(jobs):
+    if jobs < 1 or jobs > MAX_JOBS:
+        raise ValueError("--jobs must be between 1 and %d" % MAX_JOBS)
 
 
 def patch_http():
@@ -1406,6 +1412,11 @@ def main():
                          "instead of streaming it on demand. Resumable, and "
                          "afterwards the game needs no network for game data")
     args = ap.parse_args()
+
+    try:
+        validate_jobs(args.jobs)
+    except ValueError as e:
+        ap.error(str(e))
 
     global VERBOSE
     VERBOSE = args.verbose
