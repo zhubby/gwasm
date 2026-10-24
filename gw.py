@@ -17,11 +17,13 @@ import argparse
 import base64
 import hashlib
 import http.client
+import ipaddress
 import json
 import mimetypes
 import os
 import re
 import select
+import signal
 import shutil
 import socket
 import struct
@@ -34,6 +36,7 @@ from functools import partial
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 
 # ArenaNet's client key, lifted from the public app bundle. It identifies the
 # client to the patch CDN; it does not authenticate a user. Hardcoded so this
@@ -63,6 +66,7 @@ COMMON = ["version.json"]
 # ArenaNet's production CDN and ACCESS_KEY is shared by every install, so a
 # per-user burst is really every install at once. See "Conduct" in CLAUDE.md.
 PREFETCH_JOBS = 8
+MAX_JOBS = 8
 
 VERBOSE = False   # -v; routine request logging is off by default
 
@@ -356,6 +360,11 @@ class HttpError(Exception):
         self.status = status
 
 
+def validate_jobs(jobs):
+    if jobs < 1 or jobs > MAX_JOBS:
+        raise ValueError("--jobs must be between 1 and %d" % MAX_JOBS)
+
+
 def patch_http():
     return Http({"X-Access-Key": ACCESS_KEY, "User-Agent": UA,
                  "Accept-Encoding": "identity", "Connection": "keep-alive"})
@@ -365,31 +374,59 @@ def patch_http():
 
 class Manifest:
     def __init__(self, raw):
+        if not isinstance(raw, dict):
+            raise ValueError("manifest must be an object")
         if raw.get("compressionMode") not in ("none", "gzip"):
             raise ValueError("unsupported compression: %r" % raw.get("compressionMode"))
         self.compression = raw["compressionMode"]
         self.chunk_size = raw["chunkSize"]
-        if not isinstance(self.chunk_size, int) or self.chunk_size <= 0:
+        if (isinstance(self.chunk_size, bool) or
+                not isinstance(self.chunk_size, int) or self.chunk_size <= 0):
             raise ValueError("bad chunkSize: %r" % self.chunk_size)
 
         # directories[] and files[] are flat lists linked by parentIndex;
         # a falsy parentIndex means the root, mirroring the client's own check.
         dirs = raw.get("directories") or []
+        if not isinstance(dirs, list):
+            raise ValueError("bad directories")
         paths = []
-        for d in dirs:
-            parts, cur = [d["name"]], d.get("parentIndex")
+        for i, d in enumerate(dirs):
+            if not isinstance(d, dict) or not isinstance(d.get("name"), str) or not d["name"]:
+                raise ValueError("bad directory %d" % i)
+            parts, cur, seen = [d["name"]], d.get("parentIndex"), set()
             while cur:
+                if (isinstance(cur, bool) or not isinstance(cur, int) or
+                        cur < 0 or cur >= len(dirs) or cur in seen):
+                    raise ValueError("bad directory parent for %s" % d["name"])
+                seen.add(cur)
                 parts.append(dirs[cur]["name"])
                 cur = dirs[cur].get("parentIndex")
             paths.append("/".join(reversed(parts)))
 
         self.files = {}
-        for f in raw.get("files") or []:
+        files = raw.get("files") or []
+        if not isinstance(files, list):
+            raise ValueError("bad files")
+        for f in files:
+            if not isinstance(f, dict) or not isinstance(f.get("name"), str) or not f["name"]:
+                raise ValueError("bad file entry")
+            if (isinstance(f.get("size"), bool) or not isinstance(f.get("size"), int)
+                    or f["size"] < 0):
+                raise ValueError("bad size for %s" % f["name"])
             p = f.get("parentIndex")
+            if p and (isinstance(p, bool) or not isinstance(p, int) or
+                      p < 0 or p >= len(paths)):
+                raise ValueError("bad file parent for %s" % f["name"])
             path = "%s/%s" % (paths[p], f["name"]) if p else f["name"]
             expected = (f["size"] + self.chunk_size - 1) // self.chunk_size
-            if len(f["chunkHashes"]) != expected:
+            hashes = f.get("chunkHashes")
+            if not isinstance(hashes, list) or any(
+                    not isinstance(h, str) or len(h) not in _HASHES for h in hashes):
+                raise ValueError("bad chunk hashes for %s" % path)
+            if len(hashes) != expected:
                 raise ValueError("chunk count mismatch for %s" % path)
+            if path in self.files:
+                raise ValueError("duplicate file path %s" % path)
             self.files[path] = f
 
     def find(self, basename):
@@ -411,11 +448,56 @@ def fetch_chunk(http_, cache, h, compression="none"):
         import gzip
         data = gzip.decompress(data)
     algo = _HASHES.get(len(h))
-    if algo and hashlib.new(algo, data).hexdigest() != h.lower():
+    if not algo:
+        raise ValueError("unsupported chunk hash %s" % h)
+    if hashlib.new(algo, data).hexdigest() != h.lower():
         raise ValueError("hash mismatch on chunk %s" % h)
     cache.mkdir(parents=True, exist_ok=True)
     store_chunk(cache, h, data)
     return data
+
+
+def expected_chunk_size(size, chunk_size, i):
+    return min(chunk_size, size - i * chunk_size)
+
+
+def chunk_matches(path, h, expected_size):
+    """Return whether a cached chunk is complete and matches its content hash."""
+    algo = _HASHES.get(len(h))
+    if not path.is_file() or not algo:
+        return False
+    try:
+        if path.stat().st_size != expected_size:
+            return False
+        digest = hashlib.new(algo)
+        with path.open("rb") as fh:
+            for block in iter(lambda: fh.read(1024 * 1024), b""):
+                digest.update(block)
+        return digest.hexdigest() == h.lower()
+    except OSError:
+        return False
+
+
+def file_matches(path, entry, chunk_size):
+    """Check a materialized file against the manifest's chunk hashes."""
+    try:
+        if not path.is_file() or path.stat().st_size != entry["size"]:
+            return False
+        hashes = entry["chunkHashes"]
+        with path.open("rb") as fh:
+            for i, h in enumerate(hashes):
+                expected = expected_chunk_size(entry["size"], chunk_size, i)
+                data = fh.read(expected)
+                if len(data) != expected or not chunk_matches_bytes(data, h):
+                    return False
+            return fh.read(1) == b""
+    except OSError:
+        return False
+
+
+def chunk_matches_bytes(data, h):
+    algo = _HASHES.get(len(h))
+    return bool(algo and hashlib.new(algo, data).hexdigest() == h.lower())
 
 
 class Progress:
@@ -472,10 +554,11 @@ def copy_art(src, dest):
     }))
 
 
-def update(dest, cache, build, jobs=4, progress=None):
+def update(dest, cache, build, jobs=4, progress=None, stop=None):
     """Fetch any client file that is missing or the wrong size, and write the
     snapshot's chunk index so the server can serve it without assembling it."""
     http_ = patch_http()
+    stop = stop or threading.Event()
     log("checking for updates ...")
     mf = Manifest(json.loads(http_.get(PATCH_ROOT + "/manifest.json")))
 
@@ -491,18 +574,21 @@ def update(dest, cache, build, jobs=4, progress=None):
             continue
         entry = mf.files[path]
         out = dest / name
-        if not (out.exists() and out.stat().st_size == entry["size"]):
+        if not file_matches(out, entry, mf.chunk_size):
             wanted.append((name, entry, out))
 
     # Size the whole job before starting any of it: a bar that resets to zero
     # at each file is worse than no bar. The final chunk of a file is short,
     # so take its size from the file rather than assuming chunkSize.
     def chunk_bytes(entry, i):
-        return min(mf.chunk_size, entry["size"] - i * mf.chunk_size)
+        return expected_chunk_size(entry["size"], mf.chunk_size, i)
 
-    todo = [(h, chunk_bytes(e, i)) for _, e, _ in wanted
-            for i, h in enumerate(e["chunkHashes"]) if not (cache / h).exists()]
-    total = sum(n for _, n in todo)
+    todo = {}
+    for _, entry, _ in wanted:
+        for i, h in enumerate(entry["chunkHashes"]):
+            if not chunk_matches(cache / h, h, chunk_bytes(entry, i)):
+                todo.setdefault(h, chunk_bytes(entry, i))
+    total = sum(todo.values())
     if progress and total:
         progress.set(phase="client", label="Downloading Guild Wars…",
                      received=0, total=total)
@@ -512,12 +598,15 @@ def update(dest, cache, build, jobs=4, progress=None):
 
     for name, entry, out in wanted:
         hashes = entry["chunkHashes"]
-        missing = sorted({h for h in hashes if not (cache / h).exists()})
+        missing = sorted({h for i, h in enumerate(hashes)
+                          if not chunk_matches(cache / h, h, chunk_bytes(entry, i))})
         log("  %s: %.1f MB, %d chunks (%d to fetch)"
             % (name, entry["size"] / 1e6, len(hashes), len(missing)))
         if missing:
             sizes = {h: chunk_bytes(entry, i) for i, h in enumerate(hashes)}
             def grab(h):
+                if stop.is_set():
+                    return
                 fetch_chunk(http_, cache, h, mf.compression)
                 with got_lock:
                     got[0] += sizes[h]
@@ -529,6 +618,8 @@ def update(dest, cache, build, jobs=4, progress=None):
             with ThreadPoolExecutor(max_workers=jobs) as pool:
                 list(pool.map(grab, missing))
             print()
+            if stop.is_set():
+                return
 
         if progress:
             progress.set(label="Assembling %s…" % name)
@@ -569,6 +660,7 @@ class ChunkStore:
         self.fetched = 0
         self._locks = {}
         self._guard = threading.Lock()
+        self._verified = {}
         # Which chunks a boot actually touches. Recorded so the next run can
         # fetch them up front in parallel instead of discovering them one
         # 650ms round trip at a time. ~1400 chunks, about 360 MB.
@@ -579,7 +671,8 @@ class ChunkStore:
     def _ensure(self, i):
         h = self.hashes[i]
         path = self.cache / h
-        if path.exists():
+        expected = expected_chunk_size(self.size, self.chunk_size, i)
+        if self._cached_chunk_ok(path, h, expected):
             return path
         if not self.http:
             raise FileNotFoundError("chunk %d (%s) not cached, and offline" % (i, h))
@@ -588,10 +681,11 @@ class ChunkStore:
         with self._guard:
             lock = self._locks.setdefault(h, threading.Lock())
         with lock:
-            if path.exists():  # another thread won the race
+            if self._cached_chunk_ok(path, h, expected):  # another thread won the race
                 return path
             fetch_chunk(self.http, self.cache, h)
             self.fetched += 1
+            self._verified[h] = self._signature(path)
             # Per-chunk during a bulk run is 9500 lines that read as if work
             # were being repeated: the indices start mid-file, because earlier
             # chunks are already cached, and run backwards, because workers
@@ -599,6 +693,27 @@ class ChunkStore:
             if not self.quiet:
                 log("  snapshot: fetched chunk %d (%d this session)" % (i, self.fetched))
         return path
+
+    @staticmethod
+    def _signature(path):
+        try:
+            st = path.stat()
+            return st.st_size, st.st_mtime_ns
+        except OSError:
+            return None
+
+    def _cached_chunk_ok(self, path, h, expected):
+        signature = self._signature(path)
+        if signature is None or signature[0] != expected:
+            self._verified.pop(h, None)
+            return False
+        if self._verified.get(h) == signature:
+            return True
+        if chunk_matches(path, h, expected):
+            self._verified[h] = signature
+            return True
+        self._verified.pop(h, None)
+        return False
 
     @property
     def boot_list(self):
@@ -623,7 +738,7 @@ class ChunkStore:
             os.replace(tmp, self.boot_list)
         self._touched_dirty = False
 
-    def prefetch(self, progress, jobs=PREFETCH_JOBS):
+    def prefetch(self, progress, jobs=PREFETCH_JOBS, stop=None):
         """Warm the recorded working set in the background.
 
         Concurrency is capped deliberately. Single-stream is latency-bound at
@@ -634,12 +749,14 @@ class ChunkStore:
         """
         if not self.http:
             return
+        stop = stop or threading.Event()
         try:
             want = json.loads(self.boot_list.read_text())["chunks"]
         except Exception:
             return  # nothing recorded yet; this run is the one doing the recording
         todo = [i for i in want if i < len(self.hashes)
-                and not (self.cache / self.hashes[i]).exists()]
+                and not chunk_matches(self.cache / self.hashes[i], self.hashes[i],
+                                      expected_chunk_size(self.size, self.chunk_size, i))]
         if not todo:
             return
 
@@ -650,6 +767,8 @@ class ChunkStore:
         progress.set(prefetch={"done": 0, "total": total})
 
         def grab(i):
+            if stop.is_set():
+                return
             try:
                 self._ensure(i)
             except Exception:
@@ -676,7 +795,8 @@ class ChunkStore:
         up where it stopped and a later game update refetches only what changed.
         """
         todo = [i for i, h in enumerate(self.hashes)
-                if not (self.cache / h).exists()]
+                if not chunk_matches(self.cache / h, h,
+                                     expected_chunk_size(self.size, self.chunk_size, i))]
         total = self.size
         have = len(self.hashes) - len(todo)
         got = [have * self.chunk_size]
@@ -709,7 +829,7 @@ class ChunkStore:
         def grab(i):
             if stop.is_set():
                 return
-            size = min(self.chunk_size, self.size - i * self.chunk_size)
+            size = expected_chunk_size(self.size, self.chunk_size, i)
             try:
                 self._ensure(i)
             except Exception as e:
@@ -753,6 +873,8 @@ class ChunkStore:
         return True
 
     def read(self, start, length):
+        if start < 0 or length < 0:
+            raise ValueError("negative snapshot range")
         out = bytearray()
         pos, remaining = start, length
         while remaining > 0:
@@ -859,11 +981,11 @@ def _system_resolvers():
 
 
 # ---- the relay's address rules --------------------------------------------
-# A WebSocket-to-TCP bridge on localhost is an open proxy: every page in the
-# browser can reach it, not just ours. Without limits, any site you visit could
+# A WebSocket-to-TCP bridge is an open proxy: every page from an accepted
+# origin can reach it, not just ours. Without limits, any site you visit could
 # use it to reach hosts on your LAN it could never reach directly. So:
 #
-#   * bind 127.0.0.1 only, never a routable interface
+#   * bind 127.0.0.1 by default; LAN mode requires explicit origins
 #   * /dns resolves names under ALLOWED_DOMAINS and nothing else
 #   * dial only public unicast addresses -- loopback, LAN and link-local out
 #   * destination ports allowlisted
@@ -879,6 +1001,46 @@ ALLOWED_PORTS = {int(p) for p in os.environ.get(
     "GW_RELAY_PORTS", "6112,80,443").replace(" ", "").split(",") if p}
 CONNECT_TIMEOUT = 10
 
+
+def normalize_origin(value):
+    """Return an exact, browser-serialised origin for the relay allowlist."""
+    raw = value.strip()
+    try:
+        parsed = urlsplit(raw)
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        raise ValueError("origin has an invalid host or port")
+    scheme = parsed.scheme.lower()
+    if scheme not in ("http", "https"):
+        raise ValueError("origin must use http:// or https://")
+    if (not hostname or "@" in parsed.netloc or parsed.username is not None
+            or parsed.password is not None):
+        raise ValueError("origin must contain only a scheme, host and port")
+    if parsed.port is None:
+        raise ValueError("origin must include an explicit port")
+    if "*" in hostname:
+        raise ValueError("origin must not contain wildcards")
+    if parsed.path or parsed.query or parsed.fragment or "?" in raw or "#" in raw:
+        raise ValueError("origin must not contain a path, query or fragment")
+
+    host = hostname.lower()
+    if ":" in host:
+        host = "[%s]" % host
+    default_port = (scheme == "http" and port == 80) or (scheme == "https" and port == 443)
+    netloc = host if port is None or default_port else "%s:%d" % (host, port)
+    return "%s://%s" % (scheme, netloc)
+
+
+def websocket_origins(origins):
+    """Translate HTTP origins into the exact WebSocket CSP sources."""
+    out = []
+    for origin in origins:
+        parsed = urlsplit(normalize_origin(origin))
+        scheme = "wss" if parsed.scheme == "https" else "ws"
+        out.append("%s://%s" % (scheme, parsed.netloc))
+    return sorted(set(out))
+
 # Test-only escape hatch: e2e.js needs to dial a fixture on loopback, which is
 # precisely what the address rule exists to forbid. Off unless asked for, and
 # it announces itself, because a quiet way to disable this would be worse than
@@ -886,38 +1048,23 @@ CONNECT_TIMEOUT = 10
 ALLOW_PRIVATE = os.environ.get("GW_RELAY_ALLOW_PRIVATE") == "1"
 
 
-def is_public_ipv4(ip):
-    p = ip.split(".")
-    if len(p) != 4:
-        return False
+def is_public_ip(ip):
+    """Allow only globally routable unicast addresses.
+
+    The relay is a browser-reachable TCP dialer, so accepting an address merely
+    because it is syntactically valid is enough to turn it into a LAN scanner.
+    ipaddress keeps the special IPv6 ranges and IPv4-mapped addresses in one
+    place instead of duplicating an incomplete list of prefixes.
+    """
     try:
-        a, b, c, d = (int(x) for x in p)
+        addr = ipaddress.ip_address(ip)
     except ValueError:
         return False
-    if not all(0 <= n <= 255 for n in (a, b, c, d)):
+    if addr.version == 6 and addr.ipv4_mapped:
+        return is_public_ip(str(addr.ipv4_mapped))
+    if addr.version == 4 and addr in ipaddress.ip_network("192.0.0.0/24"):
         return False
-    if a == 0: return False                          # 0.0.0.0/8, and the geodc sentinel
-    if a == 10: return False                         # RFC1918
-    if a == 127: return False                        # loopback
-    if a == 169 and b == 254: return False           # link-local, incl. cloud metadata
-    if a == 172 and 16 <= b <= 31: return False      # RFC1918
-    if a == 192 and b == 168: return False           # RFC1918
-    if a == 100 and 64 <= b <= 127: return False     # CGNAT
-    if a == 192 and b == 0: return False             # IETF protocol assignments
-    if a >= 224: return False                        # multicast and reserved
-    return True
-
-
-def is_public_ip(ip):
-    if ":" not in ip:
-        return is_public_ipv4(ip)
-    h = ip.lower()
-    if h in ("::1", "::"):
-        return False
-    if re.match(r"^f[cd]", h): return False          # unique local
-    if re.match(r"^fe[89ab]", h): return False       # link-local
-    m = re.search(r"(\d+\.\d+\.\d+\.\d+)$", h)       # ::ffff:a.b.c.d
-    return is_public_ipv4(m.group(1)) if m else True
+    return addr.is_global and not addr.is_multicast
 
 
 # ---- RFC 6455 framing -----------------------------------------------------
@@ -925,6 +1072,7 @@ def is_public_ip(ip):
 # frames in, no fragmentation on the write side.
 
 WS_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+MAX_WS_FRAME = 16 * 1024 * 1024
 
 
 def frame(payload, opcode=0x2):
@@ -942,8 +1090,17 @@ def unframe(buf):
     """Returns (opcode, payload, rest) or None if more bytes are needed."""
     if len(buf) < 2:
         return None
-    opcode = buf[0] & 0x0F
+    first = buf[0]
+    if first & 0x70:
+        raise ValueError("WebSocket RSV bits are not supported")
+    if not first & 0x80:
+        raise ValueError("fragmented WebSocket messages are not supported")
+    opcode = first & 0x0F
+    if opcode not in (0x1, 0x2, 0x8, 0x9, 0xA):
+        raise ValueError("unsupported WebSocket opcode %d" % opcode)
     masked = bool(buf[1] & 0x80)
+    if not masked:
+        raise ValueError("client WebSocket frames must be masked")
     n = buf[1] & 0x7F
     off = 2
     if n == 126:
@@ -954,17 +1111,21 @@ def unframe(buf):
         if len(buf) < off + 8:
             return None
         n = struct.unpack("!Q", buf[off:off + 8])[0]; off += 8
+        if n & (1 << 63):
+            raise ValueError("invalid WebSocket frame length")
+    if n > MAX_WS_FRAME:
+        raise ValueError("WebSocket frame exceeds limit")
+    if opcode >= 0x8 and (n > 125 or not first & 0x80):
+        raise ValueError("invalid WebSocket control frame")
     mask = None
-    if masked:
-        if len(buf) < off + 4:
-            return None
-        mask = buf[off:off + 4]; off += 4
+    if len(buf) < off + 4:
+        return None
+    mask = buf[off:off + 4]; off += 4
     if len(buf) < off + n:
         return None
     payload = bytearray(buf[off:off + n])
-    if mask:
-        for i in range(n):
-            payload[i] ^= mask[i & 3]
+    for i in range(n):
+        payload[i] ^= mask[i & 3]
     return opcode, bytes(payload), buf[off + n:]
 
 
@@ -1006,7 +1167,9 @@ def bridge(sock, tcp, label):
                     elif opcode in (0x1, 0x2):
                         out += len(payload)
                         tcp.sendall(payload)
-    except OSError:
+    except (OSError, ValueError) as e:
+        if isinstance(e, ValueError):
+            log("relay protocol error %s: %s" % (label, e))
         pass
     finally:
         log("close %s -- %dB sent, %dB received, %dms"
@@ -1073,7 +1236,15 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Accept-Ranges", "bytes")
         # No COOP/COEP: the module is single-threaded and uses no
         # SharedArrayBuffer, so cross-origin isolation is unnecessary.
+        connect = " ".join(["'self'"] + websocket_origins(self.origins))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Security-Policy",
+                         "default-src 'self'; connect-src %s; " % connect +
+                         "img-src 'self' data:; font-src 'self'; "
+                         "script-src 'self'; style-src 'self'; object-src 'none'; "
+                         "base-uri 'none'; frame-ancestors 'none'")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
         super().end_headers()
 
     # -- relay ---------------------------------------------------------------
@@ -1085,7 +1256,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _websocket(self, query):
         origin = self.headers.get("Origin")
-        if origin and origin not in self.origins:
+        if origin not in self.origins:
             return self._bail(403, "origin %s" % origin)
 
         dest = query.get("dest", [""])[0]
@@ -1104,6 +1275,13 @@ class Handler(SimpleHTTPRequestHandler):
         key = self.headers.get("Sec-WebSocket-Key")
         if not key:
             return self._bail(400, "no Sec-WebSocket-Key")
+        if self.headers.get("Sec-WebSocket-Version") != "13":
+            return self._bail(400, "unsupported WebSocket version")
+        try:
+            if len(base64.b64decode(key, validate=True)) != 16:
+                raise ValueError
+        except (ValueError, base64.binascii.Error):
+            return self._bail(400, "invalid Sec-WebSocket-Key")
 
         # Connect TCP *before* completing the upgrade.
         #
@@ -1173,16 +1351,21 @@ class Handler(SimpleHTTPRequestHandler):
             return None
         m = RANGE_RE.match(header.strip())
         if not m:
-            return None
+            self.send_error(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+            return "invalid"
         first, last = m.group(1), m.group(2)
-        if first:
-            start = int(first)
-            end = int(last) if last else total - 1
-        else:
-            if not last:  # suffix form: bytes=-N -> the final N bytes
-                return None
-            start = max(0, total - int(last))
-            end = total - 1
+        try:
+            if first:
+                start = int(first)
+                end = int(last) if last else total - 1
+            else:
+                if not last:  # suffix form: bytes=-N -> the final N bytes
+                    return None
+                start = max(0, total - int(last))
+                end = total - 1
+        except ValueError:
+            self.send_error(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+            return "invalid"
         if start >= total or start > end:
             self.send_error(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
             return "invalid"
@@ -1207,6 +1390,12 @@ class Handler(SimpleHTTPRequestHandler):
             return False
         route, rest = m.group(1), m.group(2)
 
+        origin = self.headers.get("Origin")
+        if origin is not None and origin not in self.origins:
+            log("DENY proxy origin", origin)
+            self.send_error(HTTPStatus.FORBIDDEN, "origin not allowed")
+            return True
+
         if PROXY_TEMPLATE:
             url = PROXY_TEMPLATE.format(route=route) + rest
         else:
@@ -1220,7 +1409,18 @@ class Handler(SimpleHTTPRequestHandler):
                 return True
             url = "https://%s%s" % (host, rest)
 
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self.send_error(HTTPStatus.BAD_REQUEST, "invalid Content-Length")
+            return True
+        if length < 0:
+            self.send_error(HTTPStatus.BAD_REQUEST, "invalid Content-Length")
+            return True
+        if length > 8 * 1024 * 1024:
+            self.send_error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                            "proxy request body is too large")
+            return True
         body = self.rfile.read(length) if length else None
         # Drop the headers describing the hop to us rather than the request.
         skip = {"host", "connection", "content-length", "accept-encoding",
@@ -1252,7 +1452,12 @@ class Handler(SimpleHTTPRequestHandler):
         from urllib.parse import urlparse, parse_qs
         parts = urlparse(self.path)
         if parts.path == "/ping":
-            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                return self.send_error(HTTPStatus.BAD_REQUEST, "invalid Content-Length")
+            if length < 0:
+                return self.send_error(HTTPStatus.BAD_REQUEST, "invalid Content-Length")
             if length:
                 self.rfile.read(length)
             return self._ping(parse_qs(parts.query))
@@ -1322,21 +1527,28 @@ class Handler(SimpleHTTPRequestHandler):
         super().do_GET()
 
 
+class GWServer(ThreadingHTTPServer):
+    daemon_threads = True
+    block_on_close = False
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("-d", "--dir", default=None, type=Path,
                     help="where the client files live (default: ./dist)")
+    ap.add_argument("--bind", default="127.0.0.1",
+                    help="address to listen on (default: 127.0.0.1)")
     ap.add_argument("-p", "--port", type=int, default=8080)
     ap.add_argument("-c", "--cache", default=None, type=Path)
+    ap.add_argument("--origin", action="append", metavar="ORIGIN",
+                    help="allowed http(s)://host:port origin; repeat for multiple origins")
     ap.add_argument("-j", "--jobs", type=int, default=PREFETCH_JOBS,
                     help="concurrent chunk fetches, for every download this "
-                         "makes (default %d). Throughput scales almost linearly "
-                         "-- 8 gives ~3 MB/s, 16 ~7.5, 32 ~12 -- but this is "
-                         "ArenaNet's production CDN and the access key is shared "
-                         "by every install, so raising it is a decision about "
-                         "their infrastructure, not just yours."
-                         % PREFETCH_JOBS)
+                         "makes (default %d, maximum %d). The limit protects "
+                         "ArenaNet's production CDN because the access key is "
+                         "shared by every install."
+                         % (PREFETCH_JOBS, MAX_JOBS))
     ap.add_argument("--build", choices=["jspi", "asyncify", "both"], default="jspi",
                     help="jspi is 8.2MB and what Chrome picks; asyncify for Safari")
     ap.add_argument("--no-update", action="store_true", help="skip the update check")
@@ -1352,6 +1564,17 @@ def main():
                          "instead of streaming it on demand. Resumable, and "
                          "afterwards the game needs no network for game data")
     args = ap.parse_args()
+
+    try:
+        explicit_origins = sorted(set(normalize_origin(origin)
+                                       for origin in (args.origin or [])))
+    except ValueError as e:
+        ap.error("invalid --origin: %s" % e)
+
+    try:
+        validate_jobs(args.jobs)
+    except ValueError as e:
+        ap.error(str(e))
 
     global VERBOSE
     VERBOSE = args.verbose
@@ -1383,7 +1606,9 @@ def main():
         """
         try:
             if not args.no_update and not args.offline:
-                update(dest, cache, args.build, args.jobs, progress)
+                update(dest, cache, args.build, args.jobs, progress, stop)
+            if stop.is_set():
+                return
         except Exception as e:
             log("update failed: %s" % e)
             if not any(dest.glob("Gw*")):
@@ -1417,14 +1642,13 @@ def main():
         # Only now: the page can boot while this runs, and every chunk warmed
         # here is one the game does not have to wait on a round trip for.
         # After --image there is nothing left to warm, so this is a no-op.
-        if store and not args.no_prefetch:
-            store.prefetch(progress, args.jobs)
+        if store and not args.no_prefetch and not stop.is_set():
+            store.prefetch(progress, args.jobs, stop)
 
     def record():
         """Persist the working set periodically, so a run that is killed rather
         than closed still leaves a usable list behind."""
-        while True:
-            time.sleep(10)
+        while not stop.wait(10):
             store = Handler.store
             if store:
                 try:
@@ -1432,16 +1656,26 @@ def main():
                 except OSError:
                     pass
 
-    Handler.proxy_http = Http()
-    Handler.origins = {"http://127.0.0.1:%d" % args.port,
-                       "http://localhost:%d" % args.port}
-
     # Threaded: the module issues concurrent reads and a serial server
     # deadlocks -- and each relayed socket holds a thread for its lifetime.
-    httpd = ThreadingHTTPServer(("127.0.0.1", args.port),
-                                partial(Handler, directory=str(dest)))
-    url = "http://127.0.0.1:%d/" % args.port
+    httpd = GWServer((args.bind, args.port),
+                     partial(Handler, directory=str(dest)))
+    actual_port = httpd.server_address[1]
+    Handler.proxy_http = Http()
+    Handler.origins = set(explicit_origins) or {
+        normalize_origin("http://127.0.0.1:%d" % actual_port),
+        normalize_origin("http://localhost:%d" % actual_port),
+    }
+    if explicit_origins:
+        url = explicit_origins[0] + "/"
+    else:
+        browser_host = "127.0.0.1" if args.bind in ("0.0.0.0", "::") else args.bind
+        if ":" in browser_host and not browser_host.startswith("["):
+            browser_host = "[%s]" % browser_host
+        url = "http://%s:%d/" % (browser_host, actual_port)
     log("serving %s at %s" % (dest, url))
+    log("bind: %s:%d; relay origins: %s"
+        % (args.bind, actual_port, ", ".join(sorted(Handler.origins))))
     log("relay: same origin, domains %s, ports %s"
         % (", ".join(ALLOWED_DOMAINS), ", ".join(str(p) for p in sorted(ALLOWED_PORTS))))
     if ALLOW_PRIVATE:
@@ -1465,6 +1699,13 @@ def main():
     threading.Thread(target=work, daemon=True).start()
     threading.Thread(target=record, daemon=True).start()
 
+    def stop_on_signal(signum, _frame):
+        log("received signal %d -- stopping" % signum)
+        stop.set()
+        threading.Thread(target=httpd.shutdown, daemon=True).start()
+
+    signal.signal(signal.SIGTERM, stop_on_signal)
+
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -1473,6 +1714,7 @@ def main():
         stop.set()
         print("\nstopped" + (" -- rerun to resume the image download" if args.image else ""))
     finally:
+        stop.set()
         httpd.server_close()
         if Handler.store:
             Handler.store.save_touched()

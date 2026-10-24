@@ -39,7 +39,11 @@ const STARTUP_LABELS = {
 };
 
 const SNAPSHOT_URL = 'Gw.snapshot';
-const CRED_KEY = 'gw.credentials';
+// Browsers do not provide a secure equivalent of the mobile Keychain here.
+// Keep credentials only for the current page lifetime until a native helper
+// can own the storage; localStorage would make every same-origin script a
+// password reader and would survive a shared-machine logout.
+let volatileCredentials = null;
 let useJspi = false;
 
 // fileSize() is synchronous, so the size must be known before the glue loads.
@@ -396,33 +400,25 @@ Module = {
   ageSignals: stub('ageSignals'),
 
   // The module has its own login screen: it asks for stored credentials, and a
-  // rejection makes it prompt, then hands back what was typed. So the harness
-  // is never told a password, only asked to keep one.
-  //
-  // NOT secure storage. On a device this is Keychain; here it is plaintext in
-  // localStorage, readable by any script on this origin. Clear with
-  // localStorage.removeItem('gw.credentials').
-  //
-  // All three or none: the glue's missing-method branches call the result
-  // callback without returning, so a partial object throws.
+  // rejection makes it prompt, then hands back what was typed. All three
+  // methods intentionally use volatile memory in the browser harness; a
+  // persistent browser store is not secure storage.
   secureStorage: {
     async getCredentials() {
-      const raw = localStorage.getItem(CRED_KEY);
-      if (!raw) {
-        log('secureStorage: none stored — the module should prompt');
+      if (!volatileCredentials) {
+        log('secureStorage: no credentials in this page — the module should prompt');
         throw new Error('no stored credentials');
       }
-      const creds = JSON.parse(raw);
-      log(`secureStorage: returning credentials for ${creds.username}`);
-      return creds;
+      log('secureStorage: returning credentials held in memory');
+      return { ...volatileCredentials };
     },
     async storeCredentials(username, password) {
-      localStorage.setItem(CRED_KEY, JSON.stringify({ username, password }));
-      log(`secureStorage: stored credentials for ${username} (plaintext localStorage)`);
+      volatileCredentials = { username, password };
+      log('secureStorage: stored credentials in memory for this page only');
     },
     async clearCredentials() {
-      localStorage.removeItem(CRED_KEY);
-      log('secureStorage: cleared');
+      volatileCredentials = null;
+      log('secureStorage: cleared from memory');
     },
   },
 

@@ -1,0 +1,8 @@
+{
+  "name": "gw-in-browser-tests",
+  "private": true,
+  "description": "Pinned browser test tooling for gw_in_browser",
+  "devDependencies": {
+    "playwright": "1.55.1"
+  }
+}

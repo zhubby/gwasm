@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "required": [
+    "image.open",
+    "image.fileSize",
+    "image.close",
+    "image.readAsync",
+    "image.isCached",
+    "image.cacheAsync",
+    "dns.resolve",
+    "socket.connect",
+    "secureStorage.getCredentials",
+    "secureStorage.storeCredentials",
+    "secureStorage.clearCredentials",
+    "login.hasProvider",
+    "setStartupProgress"
+  ],
+  "promiseReturning": [
+    "image.readAsync",
+    "image.cacheAsync",
+    "dns.resolve",
+    "secureStorage.getCredentials",
+    "secureStorage.storeCredentials",
+    "secureStorage.clearCredentials",
+    "adProvider.showInterstitial",
+    "ageSignals.check",
+    "shop.initialize",
+    "shop.inAppPurchase"
+  ],
+  "notes": {
+    "image.fileSize": "synchronous; snapshot-chunks.json must be loaded before glue",
+    "socket.connect": "returns an object with onopen, onclose, onmessage and send",
+    "secureStorage": "browser implementation is volatile memory, not secure persistence"
+  }
+}

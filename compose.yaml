@@ -1,0 +1,35 @@
+services:
+  gw:
+    build: .
+    image: gw-in-browser:local
+    ports:
+      - "0.0.0.0:8080:8080"
+    volumes:
+      - gw-data:/data
+    command:
+      - --no-browser
+      - --bind
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --cache
+      - /data/cache
+      - --dir
+      - /data/dist
+      - --origin
+      - "${GW_ORIGIN:?set GW_ORIGIN in .env}"
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - from urllib.request import urlopen; urlopen('http://127.0.0.1:8080/', timeout=2).read(1)
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  gw-data:

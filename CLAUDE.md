@@ -23,9 +23,9 @@ twelve `File*.ArenaNetworks.com` content servers and exchanges 21 bytes out /
 32 back with each, and it reaches `Auth1.ArenaNetworks.com` with an 82-out /
 22-back handshake.
 
-**Authentication is not implemented.** `login`, `secureStorage` and
-`nativeAccount` are logging stubs, so nothing can present credentials. That is
-the blocker on actually playing.
+**Authentication is not implemented.** `login` and `nativeAccount` are stubs,
+and browser `secureStorage` keeps credentials only in memory, so nothing can
+present credentials safely yet. That is the blocker on actually playing.
 
 **Rendering is unverified.** Headless Chromium aborts at `GL ES 3.0 default
 vertex shader compilation failed` (`Engine/Gr/Gles3/GlShaderCache.cpp:959`)
@@ -110,7 +110,8 @@ See `chunkBytes()` in `harness/harness.js`.
 ### Snapshot reads are latency-bound, not bandwidth-bound
 
 Each 256 KB chunk costs ~650 ms from the CDN, so throughput scales almost
-linearly with concurrency. `PREFETCH_JOBS` is capped at 8 on purpose; see
+linearly with concurrency. `PREFETCH_JOBS` and CLI download concurrency are
+capped at 8 on purpose; see
 **Conduct** below before raising it.
 
 ### Browsers throttle hidden tabs
@@ -199,9 +200,10 @@ This talks to ArenaNet's production infrastructure, and `ACCESS_KEY` is shared
 by every install. That makes download concurrency a decision about *their*
 service rather than about one user's patience:
 
-- **Keep `PREFETCH_JOBS` at 8.** Throughput does scale — 16 gives ~7.5 MB/s and
-  32 gives ~12 — but a per-user burst is really every install at once, and a
-  rate-limited key breaks patching for people who are paying to play the game.
+- **Keep download concurrency at 8 or below.** Throughput does scale, but a
+  per-user burst is really every install at once, and a rate-limited key breaks
+  patching for people who are paying to play the game. The launcher enforces
+  this ceiling.
 - **Identify honestly and back off.** The `User-Agent` says what this is;
   retries are exponential.
 - **Pointing the relay at live game servers is a separate decision** from
@@ -209,10 +211,11 @@ service rather than about one user's patience:
 
 ## The relay is an open proxy, deliberately narrowed
 
-A WebSocket-to-TCP bridge on localhost is reachable by every page in the
-browser, not just ours. It is bounded by: loopback binding, public-unicast-only
-destinations, an allowlisted port set, an `Origin` check, and `/dns` resolving
-only under allowlisted domains.
+A WebSocket-to-TCP bridge is reachable by every page from an accepted origin,
+not just ours. The default bind is `127.0.0.1`; container mode may use
+`--bind 0.0.0.0` only with an explicit `--origin` allowlist and a trusted LAN.
+It remains bounded by public-unicast-only destinations, an allowlisted port
+set, an `Origin` check, and `/dns` resolving only under allowlisted domains.
 
 **The address rule is not the domain allowlist.** An earlier design allowed only
 IPs the relay had itself resolved; that is tighter but wrong, because the client

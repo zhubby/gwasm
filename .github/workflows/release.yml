@@ -23,10 +23,17 @@ on:
       - '**.js'
       - '**.css'
       - '**.html'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'compose.yaml'
+      - '.env.example'
+      - '.github/workflows/release.yml'
   workflow_dispatch:      # so a release can be cut without an empty commit
 
 permissions:
-  contents: write         # required to create the release
+  contents: read
 
 # Serialised rather than cancelled: two runs publishing at once would race for
 # the same tag, and a superseded run has usually already done its testing.
@@ -45,9 +52,9 @@ jobs:
         # only works on one of them is a bug in the claim or in the code.
         python: ['3.8', '3.13']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.6.0
         with:
           python-version: ${{ matrix.python }}
 
@@ -59,7 +66,7 @@ jobs:
       - run: python3 tests/test_gw.py
       - run: python3 tests/test_no_leaks.py
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
       - run: node tests/test_harness.js
@@ -68,29 +75,89 @@ jobs:
     name: Browser end-to-end
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.6.0
         with:
           python-version: '3.13'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
 
       - name: Install a browser
         run: |
-          npm install playwright
-          npx playwright install --with-deps chromium
+          npm ci --ignore-scripts --no-audit --no-fund
+          ./node_modules/.bin/playwright install --with-deps chromium
 
       # Drives the real harness against local fixtures. It reaches nothing of
       # ArenaNet's: gw.py is spawned with --offline --no-update.
       - run: node tests/e2e.js
 
-  release:
-    name: Publish
-    needs: [test, e2e]
+  container:
+    name: Container smoke test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Build runtime image
+        run: docker build --tag gw-in-browser:ci .
+
+      - name: Start offline container
+        run: |
+          set -eu
+          docker volume create gw-smoke-data >/dev/null
+          trap 'docker rm -f gw-smoke >/dev/null 2>&1 || true; docker volume rm gw-smoke-data >/dev/null 2>&1 || true' EXIT
+          docker run --detach --name gw-smoke \
+            --mount source=gw-smoke-data,target=/data \
+            --publish 127.0.0.1:8080:8080 \
+            gw-in-browser:ci \
+            --no-browser --bind 0.0.0.0 --port 8080 \
+            --cache /data/cache --dir /data/dist \
+            --origin http://127.0.0.1:8080 --offline --no-update
+
+          for _ in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8080/ >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:8080/progress.json >/dev/null
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            -H 'Origin: http://evil.example:8080' \
+            -H 'Upgrade: websocket' -H 'Connection: Upgrade' \
+            'http://127.0.0.1:8080/?dest=8.8.8.8:6112')" = 403
+          test "$(docker inspect --format '{{.Config.User}}' gw-smoke)" = gw
+          docker exec gw-smoke sh -c 'touch /data/cache/persistence-marker'
+          docker rm --force gw-smoke >/dev/null
+
+          docker run --detach --name gw-smoke \
+            --mount source=gw-smoke-data,target=/data \
+            --publish 127.0.0.1:8080:8080 \
+            gw-in-browser:ci \
+            --no-browser --bind 0.0.0.0 --port 8080 \
+            --cache /data/cache --dir /data/dist \
+            --origin http://127.0.0.1:8080 --offline --no-update
+          for _ in $(seq 1 30); do
+            if docker exec gw-smoke test -f /data/cache/persistence-marker; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec gw-smoke test -f /data/cache/persistence-marker
+
+      - name: Check image excludes game artifacts
+        run: |
+          test -z "$(docker run --rm --entrypoint sh gw-in-browser:ci -c \
+            'find /app /data -type f \( -name "*.wasm" -o -name "*.apk" -o -name "*.key" \) -print')"
+
+  release:
+    name: Publish
+    needs: [test, e2e, container]
+    permissions:
+      contents: write      # required only for this job to create the release
+      packages: write      # required to publish the runtime image to GHCR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Work out the version
         id: v
@@ -125,6 +192,20 @@ jobs:
             test -f "$f" || { echo "missing from the release: $f"; exit 1; }
           done
           echo "package looks runnable"
+
+      - name: Publish container image
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ghcr.io/${{ github.repository }}
+        run: |
+          set -eu
+          echo "$GHCR_TOKEN" | docker login ghcr.io \
+            --username "${{ github.actor }}" --password-stdin
+          docker build \
+            --tag "$IMAGE:latest" \
+            --tag "$IMAGE:${{ steps.v.outputs.tag }}" .
+          docker push "$IMAGE:latest"
+          docker push "$IMAGE:${{ steps.v.outputs.tag }}"
 
       - name: Publish
         env:

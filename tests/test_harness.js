@@ -18,6 +18,8 @@ const path = require('path');
 
 const harness = fs.readFileSync(
   path.join(__dirname, '..', 'harness', 'harness.js'), 'utf8');
+const contract = JSON.parse(fs.readFileSync(
+  path.join(__dirname, '..', 'docs', 'host-contract.json'), 'utf8'));
 
 const GLUE = "var Module = typeof Module != 'undefined' ? Module : {};" +
              "globalThis.__adopted = Module;";
@@ -138,6 +140,24 @@ for (const meth of ['getCredentials', 'storeCredentials', 'clearCredentials']) {
 check('login.hasProvider returns false', !!m && m.login.hasProvider('Steam') === false);
 check('login.getAuthToken is absent', !!m && m.login.getAuthToken === undefined);
 check('nativeAccount is undefined', !!m && m.nativeAccount === undefined);
+
+// Keep the recovered glue contract machine-readable. This catches a host
+// implementation drifting while a new client build still happens to boot far
+// enough for the older ad-hoc assertions to pass.
+for (const name of contract.required) {
+  let value = m;
+  for (const part of name.split('.')) value = value && value[part];
+  check(`contract requires ${name}`, typeof value === 'function');
+}
+const expectedAsync = new Set([
+  'image.readAsync', 'image.cacheAsync', 'dns.resolve',
+  'secureStorage.getCredentials', 'secureStorage.storeCredentials',
+  'secureStorage.clearCredentials', 'adProvider.showInterstitial',
+  'ageSignals.check', 'shop.initialize', 'shop.inAppPurchase',
+]);
+for (const name of contract.promiseReturning) {
+  check(`contract marks ${name} async`, expectedAsync.has(name));
+}
 
 const failed = results.filter((r) => !r).length;
 console.log(`\n${failed} failure(s)`);

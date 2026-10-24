@@ -42,6 +42,7 @@ _HASHES = {32: "md5", 40: "sha1", 64: "sha256"}
 
 # Fail fast rather than burning retries on something a retry cannot fix.
 _FATAL = (401, 403, 404)
+MAX_JOBS = 8
 
 
 def read_key(path):
@@ -201,12 +202,8 @@ def main():
                     help="concurrent chunk fetches (default: 4)")
     args = ap.parse_args()
 
-    if args.jobs < 1:
-        sys.exit("--jobs must be >= 1")
-    if args.jobs > 16:
-        print("warning: --jobs %d is aggressive against a third-party CDN; "
-              "past ~8 you are mostly risking rate limiting, not saving time"
-              % args.jobs, file=sys.stderr)
+    if args.jobs < 1 or args.jobs > MAX_JOBS:
+        sys.exit("--jobs must be between 1 and %d" % MAX_JOBS)
 
     key = read_key(args.key_file)
     session = make_session(key, args.jobs)

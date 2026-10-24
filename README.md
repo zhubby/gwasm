@@ -23,9 +23,14 @@ This is a work in progress, and it matters to be straight about where it stops.
 
 **You cannot currently play Guild Wars with this.** The client starts and talks
 to ArenaNet, but the parts that would hand it a username and password
-(`login`, `secureStorage`, `nativeAccount`) are stubs that only write to a log.
+(`login`, `nativeAccount`) are stubs, and browser credential storage is not
+connected to a real account flow.
 There is nothing to type credentials into. Authentication is the next piece of
 work and it has not been started.
+
+The browser harness deliberately does not persist passwords. Until a native
+secure-storage integration exists, credentials live only in the current page
+and are discarded on reload or close.
 
 Rendering has only ever been exercised in a headless browser, where the game
 aborts while compiling its shaders because there is no real GPU. On a normal
@@ -102,35 +107,68 @@ You only need these to change a default or work around a problem.
 | Option | What it does |
 |---|---|
 | `--image` | download all 4.2 GB before starting, instead of streaming |
+| `--bind HOST` | listen on a specific address (default `127.0.0.1`) |
+| `--origin ORIGIN` | allow a browser origin; repeat for multiple origins |
 | `-p 9000` | serve on a different port, if 8080 is taken |
 | `--no-browser` | do not open a browser automatically |
 | `--offline` | never download; use only what is already on disk |
 | `--no-update` | skip the check for a newer game version |
 | `--build asyncify` | the build for Safari and iOS (27.8 MB rather than 8.2 MB) |
-| `-j 16` | download with more threads — see below |
+| `-j 1..8` | choose download concurrency; 8 is the enforced maximum |
 | `-v` | log every request, for diagnosing a problem |
 
 Run `python3 gw.py --help` for the full list.
 
+### Running in Docker on a private LAN
+
+The container image is for one trusted user or a small trusted LAN, not a
+public multi-user service. The browser stays on the host; the container runs
+the file server and relay without trying to open a desktop browser.
+
+1. Copy the environment template and set the exact URL that the browser will
+   open (including the port):
+
+   ```bash
+   cp .env.example .env
+   # edit GW_ORIGIN=http://192.168.1.20:8080
+   ```
+
+2. Start the service:
+
+   ```bash
+   docker compose up -d
+   ```
+
+3. Open `http://192.168.1.20:8080` from a trusted device on the LAN. The
+   value in `GW_ORIGIN` must match that browser URL exactly. It must be a full
+   `http://host:port` or `https://host:port` origin with no path, query,
+   wildcard, or trailing slash.
+
+The `gw-data` Docker volume stores `/data/cache` (the content-addressed game
+chunks) and `/data/dist` (the client files and snapshot index). The first run
+downloads the client and then streams game data on demand. Add `--image` to the
+service command in `compose.yaml` if the complete 4.2 GB image should be
+cached before booting.
+The volume survives `docker compose down`; `docker compose down -v` removes it
+and forces the data to be downloaded again.
+
+Keep the host firewall limited to the intended LAN. The relay remains limited
+to public game addresses and ports; do not set `GW_RELAY_ALLOW_PRIVATE=1` in a
+normal deployment. This mode does not add authentication or make the project a
+multi-user service, and it does not provide a GPU to the browser.
+
 ### Downloading faster
 
-Downloads are limited by round-trip time, not bandwidth, so more threads means
-almost proportionally more speed:
+Downloads are limited by round-trip time, not bandwidth. The launcher uses
+eight workers by default, and also enforces eight as the maximum:
 
 | `-j` | speed | 4.2 GB takes |
 |---|---|---|
-| 8 (default) | ~3 MB/s | ~20 min |
-| 16 | ~7 MB/s | ~9 min |
-| 32 | ~12 MB/s | ~6 min |
+| 8 (default and maximum) | ~3 MB/s | ~20 min |
 
-```bash
-python3 gw.py --image -j 16
-```
-
-**Please think before raising this much.** These are ArenaNet's real servers,
-and everyone using this shares one access key — so if that key gets
-rate-limited, patching breaks for actual paying players, not just for us. 8 is
-the default for that reason, and 16 is already a favour being asked.
+There is no supported setting above 8. These are ArenaNet's real servers, and
+everyone using this shares one access key — so a per-user burst can get the key
+rate-limited for actual paying players, not just for us.
 
 ## Where it puts things
 

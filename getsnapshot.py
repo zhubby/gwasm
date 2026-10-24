@@ -34,6 +34,7 @@ from pathlib import Path
 import gwpatch
 
 SNAPSHOT = "Gw.snapshot"
+MAX_JOBS = 8
 
 stop = threading.Event()
 
@@ -130,12 +131,8 @@ def main():
                     help="also assemble the full file here (needs another 4.2GB)")
     args = ap.parse_args()
 
-    if args.jobs < 1:
-        sys.exit("--jobs must be >= 1")
-    if args.jobs > 16:
-        print("warning: --jobs %d against someone else's CDN is not neighbourly; "
-              "past ~10 you are mostly risking rate limiting" % args.jobs,
-              file=sys.stderr)
+    if args.jobs < 1 or args.jobs > MAX_JOBS:
+        sys.exit("--jobs must be between 1 and %d" % MAX_JOBS)
 
     key = gwpatch.read_key(args.key_file)
     session = gwpatch.make_session(key, args.jobs)
