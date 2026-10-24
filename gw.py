@@ -1170,6 +1170,13 @@ class Handler(SimpleHTTPRequestHandler):
         # No COOP/COEP: the module is single-threaded and uses no
         # SharedArrayBuffer, so cross-origin isolation is unnecessary.
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Security-Policy",
+                         "default-src 'self'; connect-src 'self' ws:; "
+                         "img-src 'self' data:; font-src 'self'; "
+                         "script-src 'self'; style-src 'self'; object-src 'none'; "
+                         "base-uri 'none'; frame-ancestors 'none'")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
         super().end_headers()
 
     # -- relay ---------------------------------------------------------------

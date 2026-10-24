@@ -239,6 +239,9 @@ def test_server(tmp):
         s, h, b = req(base + "/Gw.jspi.wasm")
         check("wasm mime", h.get("Content-Type") == "application/wasm", h.get("Content-Type"))
         check("accept-ranges advertised", h.get("Accept-Ranges") == "bytes")
+        check("content security policy advertised", "default-src 'self'" in h.get("Content-Security-Policy", ""))
+        check("nosniff advertised", h.get("X-Content-Type-Options") == "nosniff")
+        check("referrer policy advertised", h.get("Referrer-Policy") == "no-referrer")
 
         whole = (tmp / "Gw.jspi.wasm").read_bytes()
         s, h, b = req(base + "/Gw.jspi.wasm", "bytes=10-19")
