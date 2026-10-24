@@ -871,6 +871,8 @@ class ChunkStore:
         return True
 
     def read(self, start, length):
+        if start < 0 or length < 0:
+            raise ValueError("negative snapshot range")
         out = bytearray()
         pos, remaining = start, length
         while remaining > 0:

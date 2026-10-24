@@ -414,6 +414,12 @@ def test_lazy_fetch(tmp):
 
     store = gw.ChunkStore(index, FakeHttp())
     check("lazy read is correct", store.read(CHUNK, 16) == truth[CHUNK:CHUNK + 16])
+    for start, length in ((-1, 1), (0, -1)):
+        try:
+            store.read(start, length)
+            check("negative snapshot range rejected", False)
+        except ValueError:
+            check("negative snapshot range rejected", True)
     check("lazy fetch hit the network once", calls == [idx["chunkHashes"][1]], str(calls))
     check("fetched chunk was cached", (cache / idx["chunkHashes"][1]).exists())
 
