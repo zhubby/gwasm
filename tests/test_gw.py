@@ -333,7 +333,8 @@ def ws_status(port, dest, origin="http://127.0.0.1:8199"):
 
 def test_manifest():
     raw = {"compressionMode": "none", "chunkSize": 4,
-           "files": [{"name": "a.bin", "size": 6, "chunkHashes": ["x", "y"]}]}
+           "files": [{"name": "a.bin", "size": 6,
+                      "chunkHashes": ["a" * 64, "b" * 64]}]}
     mf = gw.Manifest(raw)
     check("manifest flat file", mf.find("a.bin") == "a.bin")
 
@@ -349,6 +350,23 @@ def test_manifest():
         check("manifest rejects unknown compression", False)
     except ValueError:
         check("manifest rejects unknown compression", True)
+
+    for label, bad in (
+        ("directory parent cycle", {"directories": [{"name": "a", "parentIndex": 0},
+                                                        {"name": "b", "parentIndex": 1}],
+                                      "files": []}),
+        ("file parent out of range", {"files": [{"name": "a", "size": 0,
+                                                   "parentIndex": 2, "chunkHashes": []}]}),
+        ("negative file size", {"files": [{"name": "a", "size": -1,
+                                             "chunkHashes": []}]}),
+        ("unknown hash format", {"files": [{"name": "a", "size": 1,
+                                               "chunkHashes": ["x"]}]}),
+    ):
+        try:
+            gw.Manifest({"compressionMode": "none", "chunkSize": 4, **bad})
+            check("manifest rejects %s" % label, False)
+        except ValueError:
+            check("manifest rejects %s" % label, True)
 
     for jobs in (1, gw.MAX_JOBS):
         try:

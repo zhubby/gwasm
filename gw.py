@@ -372,31 +372,59 @@ def patch_http():
 
 class Manifest:
     def __init__(self, raw):
+        if not isinstance(raw, dict):
+            raise ValueError("manifest must be an object")
         if raw.get("compressionMode") not in ("none", "gzip"):
             raise ValueError("unsupported compression: %r" % raw.get("compressionMode"))
         self.compression = raw["compressionMode"]
         self.chunk_size = raw["chunkSize"]
-        if not isinstance(self.chunk_size, int) or self.chunk_size <= 0:
+        if (isinstance(self.chunk_size, bool) or
+                not isinstance(self.chunk_size, int) or self.chunk_size <= 0):
             raise ValueError("bad chunkSize: %r" % self.chunk_size)
 
         # directories[] and files[] are flat lists linked by parentIndex;
         # a falsy parentIndex means the root, mirroring the client's own check.
         dirs = raw.get("directories") or []
+        if not isinstance(dirs, list):
+            raise ValueError("bad directories")
         paths = []
-        for d in dirs:
-            parts, cur = [d["name"]], d.get("parentIndex")
+        for i, d in enumerate(dirs):
+            if not isinstance(d, dict) or not isinstance(d.get("name"), str) or not d["name"]:
+                raise ValueError("bad directory %d" % i)
+            parts, cur, seen = [d["name"]], d.get("parentIndex"), set()
             while cur:
+                if (isinstance(cur, bool) or not isinstance(cur, int) or
+                        cur < 0 or cur >= len(dirs) or cur in seen):
+                    raise ValueError("bad directory parent for %s" % d["name"])
+                seen.add(cur)
                 parts.append(dirs[cur]["name"])
                 cur = dirs[cur].get("parentIndex")
             paths.append("/".join(reversed(parts)))
 
         self.files = {}
-        for f in raw.get("files") or []:
+        files = raw.get("files") or []
+        if not isinstance(files, list):
+            raise ValueError("bad files")
+        for f in files:
+            if not isinstance(f, dict) or not isinstance(f.get("name"), str) or not f["name"]:
+                raise ValueError("bad file entry")
+            if (isinstance(f.get("size"), bool) or not isinstance(f.get("size"), int)
+                    or f["size"] < 0):
+                raise ValueError("bad size for %s" % f["name"])
             p = f.get("parentIndex")
+            if p and (isinstance(p, bool) or not isinstance(p, int) or
+                      p < 0 or p >= len(paths)):
+                raise ValueError("bad file parent for %s" % f["name"])
             path = "%s/%s" % (paths[p], f["name"]) if p else f["name"]
             expected = (f["size"] + self.chunk_size - 1) // self.chunk_size
-            if len(f["chunkHashes"]) != expected:
+            hashes = f.get("chunkHashes")
+            if not isinstance(hashes, list) or any(
+                    not isinstance(h, str) or len(h) not in _HASHES for h in hashes):
+                raise ValueError("bad chunk hashes for %s" % path)
+            if len(hashes) != expected:
                 raise ValueError("chunk count mismatch for %s" % path)
+            if path in self.files:
+                raise ValueError("duplicate file path %s" % path)
             self.files[path] = f
 
     def find(self, basename):
