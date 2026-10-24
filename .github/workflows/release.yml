@@ -23,10 +23,13 @@ on:
       - '**.js'
       - '**.css'
       - '**.html'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/release.yml'
   workflow_dispatch:      # so a release can be cut without an empty commit
 
 permissions:
-  contents: write         # required to create the release
+  contents: read
 
 # Serialised rather than cancelled: two runs publishing at once would race for
 # the same tag, and a superseded run has usually already done its testing.
@@ -45,9 +48,9 @@ jobs:
         # only works on one of them is a bug in the claim or in the code.
         python: ['3.8', '3.13']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.6.0
         with:
           python-version: ${{ matrix.python }}
 
@@ -59,7 +62,7 @@ jobs:
       - run: python3 tests/test_gw.py
       - run: python3 tests/test_no_leaks.py
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
       - run: node tests/test_harness.js
@@ -68,18 +71,18 @@ jobs:
     name: Browser end-to-end
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.6.0
         with:
           python-version: '3.13'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
 
       - name: Install a browser
         run: |
-          npm install playwright
-          npx playwright install --with-deps chromium
+          npm install --no-audit --no-fund --no-package-lock
+          ./node_modules/.bin/playwright install --with-deps chromium
 
       # Drives the real harness against local fixtures. It reaches nothing of
       # ArenaNet's: gw.py is spawned with --offline --no-update.
@@ -88,9 +91,11 @@ jobs:
   release:
     name: Publish
     needs: [test, e2e]
+    permissions:
+      contents: write      # required only for this job to create the release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Work out the version
         id: v
