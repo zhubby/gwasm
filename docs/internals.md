@@ -21,8 +21,9 @@ snapshot opens, reads are served on demand, the twelve `File*.ArenaNetworks.com`
 content servers resolve, and the client completes a short exchange with each —
 21 bytes out, 32 back — which is it sampling them before choosing one.
 
-Blocked on **authentication**: `login`, `secureStorage` and `nativeAccount` are
-logging stubs, so there are no credentials to present.
+Blocked on **authentication**: `login` and `nativeAccount` are stubs, while
+browser `secureStorage` keeps credentials only in memory. There are no
+credentials to present safely yet.
 
 Rendering is unverified. Headless Chromium aborts at
 `GL ES 3.0 default vertex shader compilation failed`

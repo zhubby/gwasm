@@ -23,9 +23,9 @@ twelve `File*.ArenaNetworks.com` content servers and exchanges 21 bytes out /
 32 back with each, and it reaches `Auth1.ArenaNetworks.com` with an 82-out /
 22-back handshake.
 
-**Authentication is not implemented.** `login`, `secureStorage` and
-`nativeAccount` are logging stubs, so nothing can present credentials. That is
-the blocker on actually playing.
+**Authentication is not implemented.** `login` and `nativeAccount` are stubs,
+and browser `secureStorage` keeps credentials only in memory, so nothing can
+present credentials safely yet. That is the blocker on actually playing.
 
 **Rendering is unverified.** Headless Chromium aborts at `GL ES 3.0 default
 vertex shader compilation failed` (`Engine/Gr/Gles3/GlShaderCache.cpp:959`)

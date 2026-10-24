@@ -23,9 +23,14 @@ This is a work in progress, and it matters to be straight about where it stops.
 
 **You cannot currently play Guild Wars with this.** The client starts and talks
 to ArenaNet, but the parts that would hand it a username and password
-(`login`, `secureStorage`, `nativeAccount`) are stubs that only write to a log.
+(`login`, `nativeAccount`) are stubs, and browser credential storage is not
+connected to a real account flow.
 There is nothing to type credentials into. Authentication is the next piece of
 work and it has not been started.
+
+The browser harness deliberately does not persist passwords. Until a native
+secure-storage integration exists, credentials live only in the current page
+and are discarded on reload or close.
 
 Rendering has only ever been exercised in a headless browser, where the game
 aborts while compiling its shaders because there is no real GPU. On a normal

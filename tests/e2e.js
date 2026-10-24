@@ -192,6 +192,7 @@ Module.HEAPU8 = new Uint8Array(1 << 20);
     await Module.secureStorage.storeCredentials('user@example.com', 'pw');
     const got = await Module.secureStorage.getCredentials();
     E.credRoundTrip = got && got.username === 'user@example.com' && got.password === 'pw';
+    E.credNotPersisted = localStorage.getItem('gw.credentials') === null;
     await Module.secureStorage.clearCredentials();
     E.hasProvider = Module.login.hasProvider('Steam');
     E.nativeAccountAbsent = Module.nativeAccount === undefined;
@@ -635,6 +636,7 @@ function waitFor(pred, timeout = 20000) {
       // storing what it is given and signalling "none" by rejecting.
       check('getCredentials rejects when nothing stored', e2e.emptyRejects === true);
       check('credentials round-trip through storage', e2e.credRoundTrip === true);
+      check('credentials are not persisted in localStorage', e2e.credNotPersisted === true);
       check('login.hasProvider reports no federated auth', e2e.hasProvider === false,
             e2e.hasProvider);
       check('nativeAccount left undefined', e2e.nativeAccountAbsent === true,
