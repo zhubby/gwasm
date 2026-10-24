@@ -25,6 +25,10 @@ on:
       - '**.html'
       - 'package.json'
       - 'package-lock.json'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'compose.yaml'
+      - '.env.example'
       - '.github/workflows/release.yml'
   workflow_dispatch:      # so a release can be cut without an empty commit
 
@@ -88,11 +92,69 @@ jobs:
       # ArenaNet's: gw.py is spawned with --offline --no-update.
       - run: node tests/e2e.js
 
+  container:
+    name: Container smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Build runtime image
+        run: docker build --tag gw-in-browser:ci .
+
+      - name: Start offline container
+        run: |
+          set -eu
+          docker volume create gw-smoke-data >/dev/null
+          trap 'docker rm -f gw-smoke >/dev/null 2>&1 || true; docker volume rm gw-smoke-data >/dev/null 2>&1 || true' EXIT
+          docker run --detach --name gw-smoke \
+            --mount source=gw-smoke-data,target=/data \
+            --publish 127.0.0.1:8080:8080 \
+            gw-in-browser:ci \
+            --no-browser --bind 0.0.0.0 --port 8080 \
+            --cache /data/cache --dir /data/dist \
+            --origin http://127.0.0.1:8080 --offline --no-update
+
+          for _ in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8080/ >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:8080/progress.json >/dev/null
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            -H 'Origin: http://evil.example:8080' \
+            -H 'Upgrade: websocket' -H 'Connection: Upgrade' \
+            'http://127.0.0.1:8080/?dest=8.8.8.8:6112')" = 403
+          test "$(docker inspect --format '{{.Config.User}}' gw-smoke)" = gw
+          docker exec gw-smoke sh -c 'touch /data/cache/persistence-marker'
+          docker rm --force gw-smoke >/dev/null
+
+          docker run --detach --name gw-smoke \
+            --mount source=gw-smoke-data,target=/data \
+            --publish 127.0.0.1:8080:8080 \
+            gw-in-browser:ci \
+            --no-browser --bind 0.0.0.0 --port 8080 \
+            --cache /data/cache --dir /data/dist \
+            --origin http://127.0.0.1:8080 --offline --no-update
+          for _ in $(seq 1 30); do
+            if docker exec gw-smoke test -f /data/cache/persistence-marker; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec gw-smoke test -f /data/cache/persistence-marker
+
+      - name: Check image excludes game artifacts
+        run: |
+          test -z "$(docker run --rm --entrypoint sh gw-in-browser:ci -c \
+            'find /app /data -type f \( -name "*.wasm" -o -name "*.apk" -o -name "*.key" \) -print')"
+
   release:
     name: Publish
-    needs: [test, e2e]
+    needs: [test, e2e, container]
     permissions:
       contents: write      # required only for this job to create the release
+      packages: write      # required to publish the runtime image to GHCR
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -130,6 +192,20 @@ jobs:
             test -f "$f" || { echo "missing from the release: $f"; exit 1; }
           done
           echo "package looks runnable"
+
+      - name: Publish container image
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ghcr.io/${{ github.repository }}
+        run: |
+          set -eu
+          echo "$GHCR_TOKEN" | docker login ghcr.io \
+            --username "${{ github.actor }}" --password-stdin
+          docker build \
+            --tag "$IMAGE:latest" \
+            --tag "$IMAGE:${{ steps.v.outputs.tag }}" .
+          docker push "$IMAGE:latest"
+          docker push "$IMAGE:${{ steps.v.outputs.tag }}"
 
       - name: Publish
         env:

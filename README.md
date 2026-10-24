@@ -107,6 +107,8 @@ You only need these to change a default or work around a problem.
 | Option | What it does |
 |---|---|
 | `--image` | download all 4.2 GB before starting, instead of streaming |
+| `--bind HOST` | listen on a specific address (default `127.0.0.1`) |
+| `--origin ORIGIN` | allow a browser origin; repeat for multiple origins |
 | `-p 9000` | serve on a different port, if 8080 is taken |
 | `--no-browser` | do not open a browser automatically |
 | `--offline` | never download; use only what is already on disk |
@@ -116,6 +118,44 @@ You only need these to change a default or work around a problem.
 | `-v` | log every request, for diagnosing a problem |
 
 Run `python3 gw.py --help` for the full list.
+
+### Running in Docker on a private LAN
+
+The container image is for one trusted user or a small trusted LAN, not a
+public multi-user service. The browser stays on the host; the container runs
+the file server and relay without trying to open a desktop browser.
+
+1. Copy the environment template and set the exact URL that the browser will
+   open (including the port):
+
+   ```bash
+   cp .env.example .env
+   # edit GW_ORIGIN=http://192.168.1.20:8080
+   ```
+
+2. Start the service:
+
+   ```bash
+   docker compose up -d
+   ```
+
+3. Open `http://192.168.1.20:8080` from a trusted device on the LAN. The
+   value in `GW_ORIGIN` must match that browser URL exactly. It must be a full
+   `http://host:port` or `https://host:port` origin with no path, query,
+   wildcard, or trailing slash.
+
+The `gw-data` Docker volume stores `/data/cache` (the content-addressed game
+chunks) and `/data/dist` (the client files and snapshot index). The first run
+downloads the client and then streams game data on demand. Add `--image` to the
+service command in `compose.yaml` if the complete 4.2 GB image should be
+cached before booting.
+The volume survives `docker compose down`; `docker compose down -v` removes it
+and forces the data to be downloaded again.
+
+Keep the host firewall limited to the intended LAN. The relay remains limited
+to public game addresses and ports; do not set `GW_RELAY_ALLOW_PRIVATE=1` in a
+normal deployment. This mode does not add authentication or make the project a
+multi-user service, and it does not provide a GPU to the browser.
 
 ### Downloading faster
 

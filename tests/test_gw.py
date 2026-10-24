@@ -23,6 +23,7 @@ import time
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 from urllib.request import urlopen, Request
 from urllib.error import HTTPError
 
@@ -103,6 +104,33 @@ def test_allowlists():
     for ip in ("8.8.8.8", "54.196.189.234", "172.15.0.1", "172.32.0.1",
                "2606:4700::1", "::ffff:8.8.8.8"):
         check("dialable %s" % ip, gw.is_public_ip(ip))
+
+
+def test_origins():
+    check("normalizes origin host",
+          gw.normalize_origin("HTTP://Example.COM:8080") == "http://example.com:8080")
+    check("normalizes default HTTP port",
+          gw.normalize_origin("http://example.com:80") == "http://example.com")
+    check("normalizes websocket CSP source",
+          gw.websocket_origins({"http://example.com:8080", "https://secure.example:443"})
+          == ["ws://example.com:8080", "wss://secure.example"])
+    for value, why in (("ftp://example.com:8080", "scheme"),
+                       ("http://example.com", "missing port"),
+                       ("http://example.com:8080/", "path"),
+                       ("http://example.com:8080/path", "path"),
+                       ("http://example.com:8080?x=1", "query"),
+                       ("http://example.com:8080?", "empty query"),
+                       ("http://example.com:8080#", "empty fragment"),
+                       ("http://*.example.com:8080", "wildcard"),
+                       ("http://@example.com:8080", "empty userinfo"),
+                       ("http://user@example.com:8080", "userinfo"),
+                       ("http://example.com:not-a-port", "port")):
+        try:
+            gw.normalize_origin(value)
+        except ValueError:
+            check("rejects origin %s" % why, True)
+        else:
+            check("rejects origin %s" % why, False)
 
 
 # ---- DNS wire format ------------------------------------------------------
@@ -199,8 +227,8 @@ class Origin(BaseHTTPRequestHandler):
     do_GET = do_POST = _reply
 
 
-def serve(directory, port=0):
-    httpd = ThreadingHTTPServer(("127.0.0.1", port),
+def serve(directory, port=0, bind="127.0.0.1"):
+    httpd = ThreadingHTTPServer((bind, port),
                                 partial(gw.Handler, directory=str(directory)))
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return httpd
@@ -215,6 +243,26 @@ def req(url, rng=None, method="GET", body=None, headers=None):
             return resp.status, resp.headers, resp.read()
     except HTTPError as e:
         return e.code, e.headers, e.read()
+
+
+def status_with_length(url, length):
+    """Send only oversized headers so the server can reject before a body."""
+    parts = urlsplit(url)
+    sock = socket.create_connection((parts.hostname, parts.port), 10)
+    try:
+        request = ("POST %s HTTP/1.1\r\nHost: %s:%d\r\n"
+                   "Content-Length: %d\r\nConnection: close\r\n\r\n"
+                   % (parts.path, parts.hostname, parts.port, length))
+        sock.sendall(request.encode())
+        head = b""
+        while b"\r\n" not in head:
+            chunk = sock.recv(1)
+            if not chunk:
+                return None
+            head += chunk
+        return int(head.split()[1])
+    finally:
+        sock.close()
 
 
 # ---- server ---------------------------------------------------------------
@@ -240,9 +288,28 @@ def test_server(tmp):
         s, h, b = req(base + "/Gw.jspi.wasm")
         check("wasm mime", h.get("Content-Type") == "application/wasm", h.get("Content-Type"))
         check("accept-ranges advertised", h.get("Accept-Ranges") == "bytes")
-        check("content security policy advertised", "default-src 'self'" in h.get("Content-Security-Policy", ""))
+        csp = h.get("Content-Security-Policy", "")
+        check("content security policy advertised", "default-src 'self'" in csp)
+        check("default CSP allows exact websocket origin",
+              "ws://127.0.0.1:%d" % port in csp)
+        check("default CSP has no websocket wildcard",
+              "ws://*" not in csp and "ws:*" not in csp)
         check("nosniff advertised", h.get("X-Content-Type-Options") == "nosniff")
         check("referrer policy advertised", h.get("Referrer-Policy") == "no-referrer")
+
+        lan_origin = "http://192.168.1.20:%d" % port
+        gw.Handler.origins = {lan_origin}
+        s, h, _ = req(base + "/index.html")
+        csp = h.get("Content-Security-Policy", "")
+        check("LAN CSP allows configured websocket origin",
+              "ws://192.168.1.20:%d" % port in csp)
+        check("LAN CSP excludes loopback websocket origins",
+              "ws://127.0.0.1" not in csp and "ws://localhost" not in csp)
+        check("configured origin reaches relay validation",
+              ws_status(port, "not-an-ip", origin=lan_origin) == 400)
+        check("unconfigured origin denied after LAN configuration",
+              ws_status(port, "not-an-ip", origin=base) == 403)
+        gw.Handler.origins = {base}
 
         whole = (tmp / "Gw.jspi.wasm").read_bytes()
         s, h, b = req(base + "/Gw.jspi.wasm", "bytes=10-19")
@@ -282,8 +349,10 @@ def test_server(tmp):
         s, _, b = req(base + "/webgate/post", method="POST", body=b"hello",
                       headers={"Content-Type": "text/plain"})
         check("proxy POST", s == 200 and json.loads(b)["method"] == "POST")
-        s, _, _ = req(base + "/webgate/post", method="POST",
-                      body=b"x" * (8 * 1024 * 1024 + 1))
+        s, _, _ = req(base + "/webgate/post", method="POST", body=b"hello",
+                      headers={"Origin": "http://evil.example"})
+        check("proxy rejects foreign origin", s == 403, str(s))
+        s = status_with_length(base + "/webgate/post", 8 * 1024 * 1024 + 1)
         check("oversized proxy body refused", s == 413, str(s))
         s, _, _ = req(base + "/webgate/post", method="POST", body=b"hello",
                       headers={"Content-Length": "invalid"})
@@ -321,6 +390,14 @@ def test_server(tmp):
     finally:
         httpd.shutdown()
         origin.shutdown()
+
+
+def test_bind_address(tmp):
+    httpd = serve(tmp, bind="0.0.0.0")
+    try:
+        check("server accepts wildcard bind", httpd.server_address[0] == "0.0.0.0")
+    finally:
+        httpd.shutdown()
 
 
 def ws_status(port, dest, origin="auto", version="13"):
@@ -696,6 +773,8 @@ def test_install_check(tmp):
     r = subprocess.run([sys.executable, "gw.py", "--help"], cwd=str(good),
                        capture_output=True, text=True, timeout=60)
     check("a complete copy passes the check", r.returncode == 0, r.stderr[:120])
+    check("help documents bind address", "--bind" in r.stdout)
+    check("help documents allowed origin", "--origin" in r.stdout)
 
     r = subprocess.run([sys.executable, "gw.py", "-j", str(gw.MAX_JOBS + 1),
                         "--no-browser"], cwd=str(good),
@@ -708,10 +787,12 @@ def main():
     import tempfile
     test_framing()
     test_allowlists()
+    test_origins()
     test_dns_parse()
     test_manifest()
     test_watchdog()
     with tempfile.TemporaryDirectory() as td:
+        test_bind_address(Path(td))
         test_server(Path(td))
         test_lazy_fetch(Path(td) / "lazy")
         test_boot_recording(Path(td) / "boot")

@@ -204,17 +204,21 @@ Browsers cannot open raw TCP — which is exactly why the shipped Capacitor buil
 carries a native socket plugin. `gw.py` stands in for it, on the same port it
 serves the page from, so the bridge is same-origin with the harness.
 
-A WebSocket-to-TCP bridge on localhost is an open proxy, and every page in your
-browser can reach it, not just this one. Without limits, any site you visit
-could use it to reach hosts on your LAN it could never reach directly. So:
+A WebSocket-to-TCP bridge is an open proxy, and every page from an accepted
+origin can reach it, not just this one. Without limits, any site you visit
+could use it to reach hosts on your LAN it could never reach directly. By
+default the server is local-only; container mode can opt into a trusted LAN
+with an explicit bind address and Origin list. The relay still:
 
-- it binds `127.0.0.1` only
+- binds `127.0.0.1` by default (`--bind 0.0.0.0` is for the private container mode)
 - `/dns` resolves names under `arenanetworks.com` / `guildwars.com` and nothing else
 - it dials **public unicast addresses only** — loopback, RFC1918, CGNAT and
   link-local (including cloud metadata endpoints) are all refused, so the bridge
   cannot reach anything a page could not reach directly
 - destination ports are allowlisted (`6112,80,443` by default)
-- the `Origin` header must be this server
+- the `Origin` header must be in the exact `--origin` allowlist (or one of the
+  default localhost origins); configured values are full `http(s)://host:port`
+  origins with no path, query, wildcard, or trailing slash
 
 The address rule replaced an earlier one that allowed only IPs the relay had
 itself resolved. That was tighter but wrong: the client takes its game server
@@ -225,6 +229,18 @@ passes through `/dns` and nothing legitimate could connect.
 you have thought about the above. `GW_RELAY_ALLOW_PRIVATE=1` disables the
 address rule outright and exists for `e2e.js`, which dials a loopback fixture —
 it announces itself loudly at startup and is not for ordinary use.
+
+### Container deployment
+
+The repository includes a runtime `Dockerfile`, `compose.yaml` and
+`.env.example` for a single-user private LAN deployment. The image contains
+only `gw.py` and the static harness assets; it has no Node, Playwright or game
+binaries. Compose runs with `--no-browser`, binds the service to the container
+interface, and passes the explicit LAN URL as `--origin`.
+
+`/data/cache` must remain on a persistent volume because it can grow to about
+4.2 GB with `--image`. The host browser still supplies the display and GPU;
+putting the server in a container does not make headless rendering reliable.
 
 ## Loading-screen footer links
 

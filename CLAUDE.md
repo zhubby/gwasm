@@ -211,10 +211,11 @@ service rather than about one user's patience:
 
 ## The relay is an open proxy, deliberately narrowed
 
-A WebSocket-to-TCP bridge on localhost is reachable by every page in the
-browser, not just ours. It is bounded by: loopback binding, public-unicast-only
-destinations, an allowlisted port set, an `Origin` check, and `/dns` resolving
-only under allowlisted domains.
+A WebSocket-to-TCP bridge is reachable by every page from an accepted origin,
+not just ours. The default bind is `127.0.0.1`; container mode may use
+`--bind 0.0.0.0` only with an explicit `--origin` allowlist and a trusted LAN.
+It remains bounded by public-unicast-only destinations, an allowlisted port
+set, an `Origin` check, and `/dns` resolving only under allowlisted domains.
 
 **The address rule is not the domain allowlist.** An earlier design allowed only
 IPs the relay had itself resolved; that is tighter but wrong, because the client
