@@ -270,12 +270,17 @@ Module = {
     const url = useJspi ? 'Gw.jspi.wasm' : 'Gw.wasm';
     (async () => {
       try {
-        const r = await WebAssembly.instantiateStreaming(fetch(url), imports);
+        let r;
+        try {
+          r = await WebAssembly.instantiateStreaming(fetch(url), imports);
+        } catch (e) {
+          log('[warn] streaming instantiate failed, falling back:', e.message);
+          r = await WebAssembly.instantiate(await (await fetch(url)).arrayBuffer(), imports);
+        }
         success(r.instance, r.module);
       } catch (e) {
-        log('[warn] streaming instantiate failed, falling back:', e.message);
-        const r = await WebAssembly.instantiate(await (await fetch(url)).arrayBuffer(), imports);
-        success(r.instance, r.module);
+        log('[err] wasm instantiation failed:', e.message);
+        window.gwasmLoading?.fail('Could not start the game.');
       }
     })();
     return {};   // signals that instantiation is in flight

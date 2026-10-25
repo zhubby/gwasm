@@ -11,7 +11,8 @@
 // Module adoption, image.open/fileSize/readAsync/close, dns.resolve,
 // socket.connect and the onopen/onmessage/onclose contract -- which is where
 // every harness bug so far has lived (const vs var, a missing fileSize, onread
-// vs onmessage). Whether the game Wasm itself is happy still needs the
+// vs onmessage). A minimal real Wasm module also crosses the browser CSP and
+// instantiation path; whether the game Wasm itself is happy still needs the
 // production artifacts and network.
 //
 //   node tests/e2e.js
@@ -119,6 +120,19 @@ Module.HEAPU8 = new Uint8Array(1 << 20);
 
 (async () => {
   try {
+    // Exercise the real browser Wasm compiler through the harness hook. A mock
+    // glue that never calls instantiateWasm cannot catch a CSP which allows
+    // scripts but blocks WebAssembly compilation.
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('wasm instantiate timeout')), 5000);
+      Module.instantiateWasm({ env: {} }, (instance, module) => {
+        clearTimeout(timer);
+        E.wasmInstantiated = instance instanceof WebAssembly.Instance
+                          && module instanceof WebAssembly.Module;
+        resolve();
+      });
+    });
+
     const h = Module.image.open('app:/Gw.snapshot');
     note('open', h);
     note('fileSize', Module.image.fileSize(h));
@@ -600,7 +614,34 @@ function waitFor(pred, timeout = 20000) {
       const wantWasm = e2e.jspi ? 'Gw.jspi.wasm' : 'Gw.wasm';
       check(`locateFile maps wasm to ${wantWasm}`, e2e.locateFile === wantWasm,
             `got ${e2e.locateFile} (jspi=${e2e.jspi})`);
+      check('CSP permits real WebAssembly instantiation', e2e.wasmInstantiated === true,
+            e2e.errors.join('; '));
       check('no errors in glue', e2e.errors.length === 0, e2e.errors.join('; '));
+
+      // If both compiler paths fail, the loading overlay must report it rather
+      // than leaving the user on "Starting the game..." forever.
+      const wasmFailureMessage = await page.evaluate(async () => {
+        const streaming = WebAssembly.instantiateStreaming;
+        const instantiate = WebAssembly.instantiate;
+        const fail = window.gwasmLoading.fail;
+        let message = null;
+        try {
+          WebAssembly.instantiateStreaming = async () => { throw new Error('stream failed'); };
+          WebAssembly.instantiate = async () => { throw new Error('fallback failed'); };
+          window.gwasmLoading.fail = (text) => { message = text; };
+          Module.instantiateWasm({ env: {} }, () => {});
+          for (let i = 0; i < 50 && !message; i++) {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+          return message;
+        } finally {
+          WebAssembly.instantiateStreaming = streaming;
+          WebAssembly.instantiate = instantiate;
+          window.gwasmLoading.fail = fail;
+        }
+      });
+      check('Wasm compiler failure is shown on the loading screen',
+            wasmFailureMessage === 'Could not start the game.', wasmFailureMessage);
       check('image.open returned a handle', /open=\d+/.test(e2e.steps.join(',')), e2e.steps);
       check('image.open reports absence for non-snapshot files',
             e2e.openUnknown === 0 && e2e.openOtherPath === 0,

@@ -1241,7 +1241,8 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Content-Security-Policy",
                          "default-src 'self'; connect-src %s; " % connect +
                          "img-src 'self' data:; font-src 'self'; "
-                         "script-src 'self'; style-src 'self'; object-src 'none'; "
+                         "script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; "
+                         "object-src 'none'; "
                          "base-uri 'none'; frame-ancestors 'none'")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")

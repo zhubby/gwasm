@@ -290,6 +290,9 @@ def test_server(tmp):
         check("accept-ranges advertised", h.get("Accept-Ranges") == "bytes")
         csp = h.get("Content-Security-Policy", "")
         check("content security policy advertised", "default-src 'self'" in csp)
+        check("CSP allows WebAssembly compilation",
+              "script-src 'self' 'wasm-unsafe-eval'" in csp)
+        check("CSP still denies arbitrary eval", "'unsafe-eval'" not in csp)
         check("default CSP allows exact websocket origin",
               "ws://127.0.0.1:%d" % port in csp)
         check("default CSP has no websocket wildcard",
