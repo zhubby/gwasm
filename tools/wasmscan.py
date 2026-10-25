@@ -312,7 +312,7 @@ class WasmModule:
 
 def main():
     wasm = sys.argv[1] if len(sys.argv) > 1 else \
-        '/path/to/gw_in_browser/dist/Gw.jspi.wasm'
+        '/path/to/gwasm/dist/Gw.jspi.wasm'
     m = WasmModule(wasm)
     print(f'{wasm}')
     print(f'  func imports : {m.num_func_imports}')

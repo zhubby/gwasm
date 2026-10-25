@@ -1,4 +1,4 @@
-# CLAUDE.md
+# gwasm development guide
 
 Context for anyone — human or agent — working on this repo. `README.md` is the
 user-facing guide; `docs/internals.md` is the technical write-up. This file
@@ -13,7 +13,7 @@ the game, with an Astro launcher around it. Every platform service is injected
 onto a plain JavaScript `Module` object, so the same WebAssembly module runs in
 an ordinary browser given a host that supplies those services.
 
-`harness/` is that host. `gw.py` downloads the client, serves it, bridges its
+`harness/` is that host. `gwasm.py` downloads the client, serves it, bridges its
 network access, and opens a browser.
 
 ## Status
@@ -37,7 +37,7 @@ real hardware are the single most useful contribution right now.
 
 | | |
 |---|---|
-| `gw.py` | everything at runtime: update, serve, relay, prefetch, browser |
+| `gwasm.py` | everything at runtime: update, serve, relay, prefetch, browser |
 | `harness/` | `index.html` + `harness.{css,js}` + `loading.{css,js}` |
 | `images/`, `fonts/` | loading-screen art and typeface |
 | `gwkey.py` | extracts the client access key from an APK |
@@ -47,7 +47,7 @@ real hardware are the single most useful contribution right now.
 
 ## Style
 
-Applies to `gw.py` and the JS in `harness/`.
+Applies to `gwasm.py` and the JS in `harness/`.
 
 - **Single-line comments.** No block comments. A point that needs a paragraph
   belongs in `docs/internals.md`, not above the code.
@@ -124,7 +124,7 @@ reason.
 ### `geodc.arenanetworks.com` resolves to `0.0.1.2`
 
 An A record carrying a datacenter id, not an address. Windows `getaddrinfo`
-rejects `0.0.0.0/8`, so `gw.py` falls back to raw DNS queries — hand-rolled,
+rejects `0.0.0.0/8`, so `gwasm.py` falls back to raw DNS queries — hand-rolled,
 since Python has no stdlib resolver beyond `getaddrinfo` and `getaddrinfo` is
 the thing being bypassed.
 
@@ -142,11 +142,11 @@ It ignores `Range` and does not know `application/wasm`. Both are fatal.
 
 ## Zero dependencies is a feature
 
-`gw.py` is stdlib-only: no `pip install`, no Node. This is not minimalism for
+`gwasm.py` is stdlib-only: no `pip install`, no Node. This is not minimalism for
 its own sake. On Debian, Ubuntu and Fedora system Pythons, PEP 668 makes `pip
 install` fail outright with `externally-managed-environment` — which would hit
 exactly the non-technical user who downloaded a zip and double-clicked it. The
-release workflow asserts this by importing `gw` on a clean interpreter.
+release workflow asserts this by importing `gwasm` on a clean interpreter.
 
 Node is required only to run two of the four test suites.
 
@@ -155,9 +155,9 @@ Node is required only to run two of the four test suites.
 No game binaries are in this repo; they are fetched from ArenaNet's CDN at
 runtime. Three deliberate exceptions:
 
-- **The access key**, hardcoded in `gw.py`. It ships in the public app bundle
+- **The access key**, hardcoded in `gwasm.py`. It ships in the public app bundle
   and identifies the client rather than a user. Hardcoding it is what lets
-  `gw.py` run with nothing to configure. `gwkey.py` extracts a fresh one from
+  `gwasm.py` run with nothing to configure. `gwkey.py` extracts a fresh one from
   an APK if it rotates. `tests/test_no_leaks.py` exempts this one key **by
   value**, so any other credential still fails that check — do not widen the
   exemption to a pattern.
@@ -176,7 +176,7 @@ None of these is a precedent for committing anything else.
 ## Testing
 
 ```bash
-python3 tests/test_gw.py         # framing, allowlists, DNS, ranges, snapshot, proxy
+python3 tests/test_gwasm.py      # framing, allowlists, DNS, ranges, snapshot, proxy
 python3 tests/test_no_leaks.py   # nothing publishable-by-accident is tracked
 node    tests/test_harness.js    # Module adoption and the host surface
 node    tests/e2e.js             # the real harness in headless Chromium
@@ -188,7 +188,7 @@ TCP server, and a mock glue that drives `Module.*` the way the real one does.
 wiring rather than in the parts a unit test reaches. It needs a Chromium, found
 via `~/.cache/ms-playwright` or `CHROME_PATH`.
 
-The whole thing can be driven end to end locally — start `gw.py`, drive it with
+The whole thing can be driven end to end locally — start `gwasm.py`, drive it with
 `playwright-core`. There is no need to ask a human to run it.
 
 What tests cannot cover is whether the real wasm is satisfied, which needs
@@ -224,7 +224,7 @@ from DNS, so no lookup passes through `/dns` and nothing legitimate could
 connect. What the rule really guards is reaching hosts a page could not reach
 directly — a property of the address, so the address is what gets tested.
 
-`GW_RELAY_ALLOW_PRIVATE=1` disables that check and exists solely for `e2e.js`,
+`GWASM_RELAY_ALLOW_PRIVATE=1` disables that check and exists solely for `e2e.js`,
 which dials a loopback fixture. It announces itself loudly at startup.
 
 ## Next steps

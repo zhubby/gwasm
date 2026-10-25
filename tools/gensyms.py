@@ -139,7 +139,7 @@ print("Search: Bookmarks -> filter 'wasm-string', or Search Program Text for the
 
 def main():
     src = sys.argv[1] if len(sys.argv) > 1 else \
-        '/path/to/gw_in_browser/dist/Gw.jspi.wasm'
+        '/path/to/gwasm/dist/Gw.jspi.wasm'
     outdir = sys.argv[2] if len(sys.argv) > 2 else \
         'path/to/GWCA-wasm/build'
     os.makedirs(outdir, exist_ok=True)

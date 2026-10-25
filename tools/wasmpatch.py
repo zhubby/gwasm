@@ -193,7 +193,7 @@ def patch(src, dst, mapping_path=None, table_headroom=0):
 
 def main():
     src = sys.argv[1] if len(sys.argv) > 1 else \
-        '/path/to/gw_in_browser/dist/Gw.jspi.wasm'
+        '/path/to/gwasm/dist/Gw.jspi.wasm'
     dst = sys.argv[2] if len(sys.argv) > 2 else \
         'path/to/Gw.jspi.patched.wasm'
     import os

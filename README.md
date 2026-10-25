@@ -1,9 +1,9 @@
-# Guild Wars in your browser
+# gwasm
 
-Runs the WebAssembly build of Guild Wars locally, in an ordinary browser.
+gwasm runs the WebAssembly build of Guild Wars locally, in an ordinary browser.
 
 ```bash
-python3 gw.py
+python3 gwasm.py
 ```
 
 That is the whole thing. It downloads what it needs, serves it, and opens your
@@ -54,21 +54,21 @@ login. You would need an account to actually play, once that exists.
 
 ## Running it
 
-1. Download the latest **[release zip](https://github.com/gwdevhub/gw_in_browser/releases/latest)**.
-2. **Unzip it properly**, to a real folder — do not run `gw.py` from inside the
-   zip. Windows lets you open a zip like a folder, but double-clicking `gw.py`
+1. Download the latest **[release zip](https://github.com/zhubby/gwasm/releases/latest)**.
+2. **Unzip it properly**, to a real folder — do not run `gwasm.py` from inside the
+   zip. Windows lets you open a zip like a folder, but double-clicking `gwasm.py`
    there runs it on its own without the rest of the game. (If you do, it will
    tell you so rather than failing silently.)
 3. Start it:
-   - **Windows**: double-click `gw.py`.
-   - **macOS / Linux**: open a terminal in the folder and run `python3 gw.py`.
+   - **Windows**: double-click `gwasm.py`.
+   - **macOS / Linux**: open a terminal in the folder and run `python3 gwasm.py`.
 
 Your browser opens by itself, and on Windows the black command window tucks
 itself into the taskbar once it has. **Leave it running** — closing it stops
 the server, and the game with it.
 
 **Closing the browser stops it.** A few seconds after the last tab pointing at
-the game is gone, `gw.py` shuts itself down — there is nothing left running and
+the game is gone, `gwasm.py` shuts itself down — there is nothing left running and
 nothing to remember to kill. Reloading the page, or having a second tab open,
 does not trigger it.
 
@@ -91,7 +91,7 @@ Later runs are much quicker, because everything downloaded is kept.
 To wait once instead of every time:
 
 ```bash
-python3 gw.py --image
+python3 gwasm.py --image
 ```
 
 This fetches the complete 4.2 GB game image before starting — expect **around
@@ -117,7 +117,7 @@ You only need these to change a default or work around a problem.
 | `-j 1..8` | choose download concurrency; 8 is the enforced maximum |
 | `-v` | log every request, for diagnosing a problem |
 
-Run `python3 gw.py --help` for the full list.
+Run `python3 gwasm.py --help` for the full list.
 
 ### Running in Docker on a private LAN
 
@@ -130,7 +130,7 @@ the file server and relay without trying to open a desktop browser.
 
    ```bash
    cp .env.example .env
-   # edit GW_ORIGIN=http://192.168.1.20:8080
+   # edit GWASM_ORIGIN=http://192.168.1.20:8080
    ```
 
 2. Start the service:
@@ -140,11 +140,11 @@ the file server and relay without trying to open a desktop browser.
    ```
 
 3. Open `http://192.168.1.20:8080` from a trusted device on the LAN. The
-   value in `GW_ORIGIN` must match that browser URL exactly. It must be a full
+   value in `GWASM_ORIGIN` must match that browser URL exactly. It must be a full
    `http://host:port` or `https://host:port` origin with no path, query,
    wildcard, or trailing slash.
 
-The `gw-data` Docker volume stores `/data/cache` (the content-addressed game
+The `gwasm-data` Docker volume stores `/data/cache` (the content-addressed game
 chunks) and `/data/dist` (the client files and snapshot index). The first run
 downloads the client and then streams game data on demand. Add `--image` to the
 service command in `compose.yaml` if the complete 4.2 GB image should be
@@ -153,7 +153,7 @@ The volume survives `docker compose down`; `docker compose down -v` removes it
 and forces the data to be downloaded again.
 
 Keep the host firewall limited to the intended LAN. The relay remains limited
-to public game addresses and ports; do not set `GW_RELAY_ALLOW_PRIVATE=1` in a
+to public game addresses and ports; do not set `GWASM_RELAY_ALLOW_PRIVATE=1` in a
 normal deployment. This mode does not add authentication or make the project a
 multi-user service, and it does not provide a GPU to the browser.
 
@@ -172,7 +172,7 @@ rate-limited for actual paying players, not just for us.
 
 ## Where it puts things
 
-Everything lands next to `gw.py`. Nothing is installed system-wide and nothing
+Everything lands next to `gwasm.py`. Nothing is installed system-wide and nothing
 is written elsewhere:
 
 - `dist/` — the game client and the page it is served from
@@ -187,12 +187,12 @@ Deleting either is safe; both are rebuilt on the next run. Deleting
 Python is missing or not on your PATH. See *What you need*. On Windows,
 reinstall it with "Add python.exe to PATH" ticked.
 
-**"Guild Wars cannot start: it is still inside the zip"**
-Exactly what it says — extract the zip to a real folder first, then run `gw.py`
+**"gwasm cannot start: it is still inside the zip"**
+Exactly what it says — extract the zip to a real folder first, then run `gwasm.py`
 from there.
 
 **"Address already in use"**
-Something else has port 8080. Use `python3 gw.py -p 9000`.
+Something else has port 8080. Use `python3 gwasm.py -p 9000`.
 
 **The page says it could not download the game**
 Check your connection, then read the terminal window — the actual error is
@@ -203,7 +203,7 @@ printed there. Run it again; nothing already downloaded is lost.
 
 **The loading screen finishes and the window is blank**
 That is the open rendering question above. Please
-[open an issue](https://github.com/gwdevhub/gw_in_browser/issues) saying which
+[open an issue](https://github.com/zhubby/gwasm/issues) saying which
 operating system, browser and graphics card you have — that is exactly the
 information this project is missing.
 

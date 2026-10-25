@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Run Guild Wars in your browser. Double-click this file, or:
+"""gwasm runs Guild Wars in your browser. Double-click this file, or:
 
-    python3 gw.py
+    python3 gwasm.py
 
 It downloads what it needs on first run, serves it, and opens a browser.
 Nothing to install -- Python 3.8+ and its standard library are enough.
@@ -44,7 +44,7 @@ from urllib.parse import urlsplit
 ACCESS_KEY = "2043FE79-F32D-4FD7-8C27-0D47231C4F03"
 
 PATCH_ROOT = "https://patching.1.arenanetworks.com"
-UA = "gwpatch/0.2 (interop research)"
+UA = "gwasm/0.2 (interop research)"
 SNAPSHOT = "Gw.snapshot"
 
 # instantiateStreaming is strict about this and older Pythons do not know it.
@@ -129,7 +129,7 @@ def die(*lines):
     sys.exit(1)
 
 
-# What has to sit next to gw.py. images/ and fonts/ are deliberately not here:
+# What has to sit next to gwasm.py. images/ and fonts/ are deliberately not here:
 # without them the loading screen falls back to a gradient and a stock
 # typeface, which is a worse-looking game rather than a broken one.
 REQUIRED = [
@@ -144,7 +144,7 @@ REQUIRED = [
 def check_install(here):
     """Refuse to start, legibly, when this copy cannot work."""
     if sys.version_info < (3, 8):
-        die("Guild Wars needs Python 3.8 or newer.",
+        die("gwasm needs Python 3.8 or newer.",
             "",
             "This is Python %d.%d, at %s."
             % (sys.version_info[0], sys.version_info[1], sys.executable),
@@ -158,26 +158,26 @@ def check_install(here):
 
     # Windows opens a zip like a folder and, on double-click, extracts only the
     # file you clicked into a temp directory whose path still contains the
-    # zip's name. gw.py then starts completely alone, which is much the most
+    # zip's name. gwasm.py then starts completely alone, which is much the most
     # likely way for anyone to end up here.
     if ".zip" in str(here).lower():
-        die("Guild Wars cannot start: it is still inside the zip.",
+        die("gwasm cannot start: it is still inside the zip.",
             "",
-            "Double-clicking gw.py inside a zip runs only that one file,",
+            "Double-clicking gwasm.py inside a zip runs only that one file,",
             "without the rest of the game beside it.",
             "",
             "Extract the whole zip to a real folder first -- right-click it",
-            "and choose \"Extract All\" -- then run gw.py from there.")
+            "and choose \"Extract All\" -- then run gwasm.py from there.")
 
-    die(*(["Guild Wars cannot start: some of its files are missing.",
+    die(*(["gwasm cannot start: some of its files are missing.",
            "",
            "Looked in: %s" % here,
            "",
            "Missing:"]
           + ["  " + f for f in missing]
           + ["",
-             "gw.py needs its harness folder beside it. Download the project",
-             "again and keep the folder together rather than moving gw.py out",
+             "gwasm.py needs its harness folder beside it. Download the project",
+             "again and keep the folder together rather than moving gwasm.py out",
              "on its own."]))
 
 
@@ -896,7 +896,7 @@ class ChunkStore:
 # ---- DNS ------------------------------------------------------------------
 
 ALLOWED_DOMAINS = [d.strip().lower() for d in os.environ.get(
-    "GW_RELAY_DOMAINS", "arenanetworks.com,guildwars.com").split(",") if d.strip()]
+    "GWASM_RELAY_DOMAINS", "arenanetworks.com,guildwars.com").split(",") if d.strip()]
 FALLBACK_DNS = ["1.1.1.1", "8.8.8.8"]
 
 
@@ -998,7 +998,7 @@ def _system_resolvers():
 # page could not reach itself -- a property of the address, so test the address.
 
 ALLOWED_PORTS = {int(p) for p in os.environ.get(
-    "GW_RELAY_PORTS", "6112,80,443").replace(" ", "").split(",") if p}
+    "GWASM_RELAY_PORTS", "6112,80,443").replace(" ", "").split(",") if p}
 CONNECT_TIMEOUT = 10
 
 
@@ -1045,7 +1045,7 @@ def websocket_origins(origins):
 # precisely what the address rule exists to forbid. Off unless asked for, and
 # it announces itself, because a quiet way to disable this would be worse than
 # not having the rule at all.
-ALLOW_PRIVATE = os.environ.get("GW_RELAY_ALLOW_PRIVATE") == "1"
+ALLOW_PRIVATE = os.environ.get("GWASM_RELAY_ALLOW_PRIVATE") == "1"
 
 
 def is_public_ip(ip):
@@ -1201,12 +1201,12 @@ PROXY_ROUTES = {
     "store": "store.guildwars.com",
     "www": "www.guildwars.com",
 }
-for _pair in filter(None, os.environ.get("GW_PROXY_ROUTES", "").split(",")):
+for _pair in filter(None, os.environ.get("GWASM_PROXY_ROUTES", "").split(",")):
     _r, _, _h = _pair.partition("=")
     if _r and _h:
         PROXY_ROUTES[_r.strip()] = _h.strip()
 
-PROXY_TEMPLATE = os.environ.get("GW_PROXY_TEMPLATE")  # tests point this at a fixture
+PROXY_TEMPLATE = os.environ.get("GWASM_PROXY_TEMPLATE")  # tests point this at a fixture
 ROUTE_RE = re.compile(r"^/([a-z0-9][a-z0-9-]{0,30})(/.*)$", re.I)
 RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 
@@ -1527,7 +1527,7 @@ class Handler(SimpleHTTPRequestHandler):
         super().do_GET()
 
 
-class GWServer(ThreadingHTTPServer):
+class GwasmServer(ThreadingHTTPServer):
     daemon_threads = True
     block_on_close = False
 
@@ -1658,7 +1658,7 @@ def main():
 
     # Threaded: the module issues concurrent reads and a serial server
     # deadlocks -- and each relayed socket holds a thread for its lifetime.
-    httpd = GWServer((args.bind, args.port),
+    httpd = GwasmServer((args.bind, args.port),
                      partial(Handler, directory=str(dest)))
     actual_port = httpd.server_address[1]
     Handler.proxy_http = Http()
@@ -1679,7 +1679,7 @@ def main():
     log("relay: same origin, domains %s, ports %s"
         % (", ".join(ALLOWED_DOMAINS), ", ".join(str(p) for p in sorted(ALLOWED_PORTS))))
     if ALLOW_PRIVATE:
-        log("relay: WARNING -- GW_RELAY_ALLOW_PRIVATE=1, private addresses may "
+        log("relay: WARNING -- GWASM_RELAY_ALLOW_PRIVATE=1, private addresses may "
             "be dialled. This is for tests; do not browse with it set.")
 
     # Browser first, then the download: the point of the loading screen is that

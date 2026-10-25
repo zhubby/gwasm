@@ -1,4 +1,4 @@
-# Internals
+# gwasm internals
 
 How the client is put together and how this repo drives it. For running the
 game, see the [README](../README.md).
@@ -35,7 +35,7 @@ real GPU does is unknown.
 
 | | |
 |---|---|
-| `gw.py` | the whole runtime: downloads, serves, relays, opens a browser |
+| `gwasm.py` | the whole runtime: downloads, serves, relays, opens a browser |
 | `harness/` | the page it serves; supplies the `Module.*` services |
 | `images/`, `fonts/` | loading-screen art and typeface |
 | `gwkey.py` | extracts the client's access key from an APK |
@@ -47,9 +47,9 @@ real GPU does is unknown.
 No game binaries are in this repo; they are fetched from ArenaNet's CDN at
 runtime. Three deliberate exceptions:
 
-- **The access key**, hardcoded in `gw.py`. It ships in the public app bundle
+- **The access key**, hardcoded in `gwasm.py`. It ships in the public app bundle
   and identifies the client rather than a user. Hardcoding it is what lets
-  `gw.py` run with nothing to configure. `gwkey.py` extracts a fresh one from
+  `gwasm.py` run with nothing to configure. `gwkey.py` extracts a fresh one from
   an APK if it rotates.
 - **`images/`** — the Guild Wars logo and four screenshots. ArenaNet's artwork,
   committed so the loading screen works offline and does not hotlink a fan site
@@ -73,16 +73,16 @@ None of these is a precedent for committing anything else.
 `--build` selects the pair to fetch, defaulting to `jspi`:
 
 ```bash
-python3 gw.py --build jspi      # 8.2 MB, what Chrome picks
-python3 gw.py --build asyncify  # 27.8 MB, for Safari/iOS
-python3 gw.py --build both
+python3 gwasm.py --build jspi      # 8.2 MB, what Chrome picks
+python3 gwasm.py --build asyncify  # 27.8 MB, for Safari/iOS
+python3 gwasm.py --build both
 ```
 
 The harness feature-detects at runtime exactly as the shipped launcher does —
 `ios ? Asyncify : 'Suspending' in WebAssembly` — and falls back if the preferred
 glue is absent.
 
-**If you switch builds, clear `dist/` first.** `gw.py` skips files that are
+**If you switch builds, clear `dist/` first.** `gwasm.py` skips files that are
 already present at the right size, so a stale `Gw.wasm` lingers. Both builds were compiled
 with the same output basename, so `Gw.jspi.js` also asks for `Gw.wasm`; the
 harness redirects that via `locateFile`, but a leftover file is still confusing
@@ -112,7 +112,7 @@ Two reasons, both fatal:
   small and random, so every read would drag the entire image.
 - It does not know `application/wasm`, which `instantiateStreaming` requires.
 
-`gw.py` handles both, and additionally serves `Gw.snapshot` **virtually from
+`gwasm.py` handles both, and additionally serves `Gw.snapshot` **virtually from
 `gwpatch-cache/`** — mapping each range onto the 256 KB chunks covering it. Since
 reads are on demand, you can boot without ever assembling the 4.2 GB file.
 
@@ -201,7 +201,7 @@ directly, not with an event.
 ## The relay is deliberately narrow
 
 Browsers cannot open raw TCP — which is exactly why the shipped Capacitor build
-carries a native socket plugin. `gw.py` stands in for it, on the same port it
+carries a native socket plugin. `gwasm.py` stands in for it, on the same port it
 serves the page from, so the bridge is same-origin with the harness.
 
 A WebSocket-to-TCP bridge is an open proxy, and every page from an accepted
@@ -225,8 +225,8 @@ itself resolved. That was tighter but wrong: the client takes its game server
 address from the authenticated login response, not from DNS, so no lookup ever
 passes through `/dns` and nothing legitimate could connect.
 
-`GW_RELAY_DOMAINS` and `GW_RELAY_PORTS` widen the allowlists; do that only if
-you have thought about the above. `GW_RELAY_ALLOW_PRIVATE=1` disables the
+`GWASM_RELAY_DOMAINS` and `GWASM_RELAY_PORTS` widen the allowlists; do that only if
+you have thought about the above. `GWASM_RELAY_ALLOW_PRIVATE=1` disables the
 address rule outright and exists for `e2e.js`, which dials a loopback fixture —
 it announces itself loudly at startup and is not for ordinary use.
 
@@ -234,7 +234,7 @@ it announces itself loudly at startup and is not for ordinary use.
 
 The repository includes a runtime `Dockerfile`, `compose.yaml` and
 `.env.example` for a single-user private LAN deployment. The image contains
-only `gw.py` and the static harness assets; it has no Node, Playwright or game
+only `gwasm.py` and the static harness assets; it has no Node, Playwright or game
 binaries. Compose runs with `--no-browser`, binds the service to the container
 interface, and passes the explicit LAN URL as `--origin`.
 
@@ -244,10 +244,8 @@ putting the server in a container does not make headless rendering reliable.
 
 ## Loading-screen footer links
 
-Discord, GitHub and Donate, in the middle of the footer, mirroring
-gwtoolbox.com. The destinations were taken from that site rather than invented:
-`discord.gg/pGS5pFn` and `opencollective.com/gwdevhub_collective`, both
-confirmed live.
+The gwasm repository and Guild Wars community Discord appear in the middle of
+the footer. Both destinations are confirmed live.
 
 Every link carries `rel="noopener noreferrer"`: these are external sites, and
 there is no reason to hand them a window handle or the address of a server on
@@ -256,7 +254,7 @@ someone's machine. `e2e.js` asserts it.
 ## CI
 
 `.github/workflows/release.yml` runs the suite on every push to `main` and, if
-it passes, publishes a release: a zip of `gw.py`, `harness/`, `images/`,
+it passes, publishes a release: a zip of `gwasm.py`, `harness/`, `images/`,
 `fonts/`, the README and the licence -- what someone needs to run it, without
 `tests/`, `tools/` or `docs/`.
 
@@ -264,7 +262,7 @@ Three things it is doing deliberately:
 
 - **`test_no_leaks.py` gates the release.** Publishing is exactly the moment
   that guard matters, since a release turns a mistake into a download.
-- **No `pip install` anywhere**, and a bare `import gw` on a clean interpreter.
+- **No `pip install` anywhere**, and a bare `import gwasm` on a clean interpreter.
   If the zero-dependency property is ever lost, that step is where it breaks.
 - **Python 3.8 and 3.13**, because the README promises 3.8 and an untested
   floor is a guess.
@@ -276,7 +274,7 @@ ships.
 ## Tests
 
 ```bash
-python3 tests/test_gw.py         # framing, allowlists, DNS, ranges, snapshot, proxy
+python3 tests/test_gwasm.py      # framing, allowlists, DNS, ranges, snapshot, proxy
 python3 tests/test_no_leaks.py   # nothing publishable-by-accident is tracked
 node    tests/test_harness.js    # Module adoption and the host surface
 node    tests/e2e.js             # the real harness in headless Chromium

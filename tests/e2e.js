@@ -3,7 +3,7 @@
 // Everything ArenaNet-side is replaced by local fixtures, so this runs offline
 // and deterministically:
 //
-//   * a synthetic snapshot, served by gw.py from a chunk cache
+//   * a synthetic snapshot, served by gwasm.py from a chunk cache
 //   * a stand-in TCP server on localhost that speaks a tiny scripted protocol
 //   * a mock Gw.js that drives Module.* the way the real glue does
 //
@@ -11,8 +11,8 @@
 // Module adoption, image.open/fileSize/readAsync/close, dns.resolve,
 // socket.connect and the onopen/onmessage/onclose contract -- which is where
 // every harness bug so far has lived (const vs var, a missing fileSize, onread
-// vs onmessage). What it cannot check is whether the real wasm is happy; that
-// still needs artifacts and network.
+// vs onmessage). Whether the game Wasm itself is happy still needs the
+// production artifacts and network.
 //
 //   node tests/e2e.js
 
@@ -58,7 +58,7 @@ const CLIENT_HELLO = Buffer.from('HELLO-FROM-WASM');
 const SERVER_REPLY = Buffer.from('WELCOME-TO-TYRIA');
 
 function makeFixtureDirs(fixturePort) {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gw_in_browser-e2e-'));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gwasm-e2e-'));
   const dist = path.join(tmp, 'dist');
   const cache = path.join(tmp, 'cache');
   fs.mkdirSync(dist, { recursive: true });
@@ -83,7 +83,7 @@ function makeFixtureDirs(fixturePort) {
     size, chunkSize: CHUNK, cache, chunkHashes: hashes,
   }));
 
-  // gw.py copies the whole harness directory now, not one file.
+  // gwasm.py copies the whole harness directory now, not one file.
   for (const f of fs.readdirSync(path.join(REPO, 'harness'))) {
     fs.copyFileSync(path.join(REPO, 'harness', f), path.join(dist, f));
   }
@@ -151,7 +151,7 @@ Module.HEAPU8 = new Uint8Array(1 << 20);
 
     // Drop the memory tier and ask again: the persistent store still holds
     // these chunks, so residency must still report true.
-    if (window.gwEvictMemory) window.gwEvictMemory();
+    if (window.gwasmEvictMemory) window.gwasmEvictMemory();
     E.cachedAfterEvict = Module.image.isCached(h, 8192, 8);
 
     // And the short final chunk.
@@ -190,7 +190,7 @@ Module.HEAPU8 = new Uint8Array(1 << 20);
     await Module.secureStorage.storeCredentials('user@example.com', 'pw');
     const got = await Module.secureStorage.getCredentials();
     E.credRoundTrip = got && got.username === 'user@example.com' && got.password === 'pw';
-    E.credNotPersisted = localStorage.getItem('gw.credentials') === null;
+    E.credNotPersisted = localStorage.getItem('gwasm.credentials') === null;
     await Module.secureStorage.clearCredentials();
     E.hasProvider = Module.login.hasProvider('Steam');
     E.nativeAccountAbsent = Module.nativeAccount === undefined;
@@ -216,11 +216,11 @@ Module.HEAPU8 = new Uint8Array(1 << 20);
     // Without dedup the module's overlapping cacheAsync calls fetched the same
     // chunk several times over: a real boot moved 932MB to deliver 227MB and
     // never finished starting.
-    window.gwEvictMemory();
-    const before = window.gwStats();
+    window.gwasmEvictMemory();
+    const before = window.gwasmStats();
     await Promise.all([0, 1, 2, 3].map(
       () => Module.image.cacheAsync(h, 0, 8192, () => {})));
-    const after = window.gwStats();
+    const after = window.gwasmStats();
     E.dedupFetches = (after.chunksFromNetwork - before.chunksFromNetwork)
                    + (after.chunksFromCacheStore - before.chunksFromCacheStore);
     E.dedupCoalesced = after.chunksCoalesced - before.chunksCoalesced;
@@ -282,16 +282,16 @@ function waitFor(pred, timeout = 20000) {
   // localhost resolves through /etc/hosts, so this also confirms the relay
   // uses getaddrinfo -- a raw DNS query would not see it.
   const server = spawn('python3', [
-    path.join(REPO, 'gw.py'), '-d', dist, '-p', '0',
+    path.join(REPO, 'gwasm.py'), '-d', dist, '-p', '0',
     '--no-browser', '--offline', '--no-update',
   ], {
     // The fixture lives on loopback, which the address rule exists to forbid,
     // so the test has to say so explicitly.
     env: {
       ...process.env,
-      GW_RELAY_DOMAINS: 'localhost',
-      GW_RELAY_PORTS: String(fixturePort),
-      GW_RELAY_ALLOW_PRIVATE: '1',
+      GWASM_RELAY_DOMAINS: 'localhost',
+      GWASM_RELAY_PORTS: String(fixturePort),
+      GWASM_RELAY_ALLOW_PRIVATE: '1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -308,7 +308,7 @@ function waitFor(pred, timeout = 20000) {
     http.get({ host: '127.0.0.1', port: httpPort, path: '/index.html' },
              (res) => r(res.statusCode === 200)).on('error', () => r(false));
   }));
-  check('gw.py serving', up);
+  check('gwasm.py serving', up);
 
   let browser;
   try {
@@ -325,6 +325,8 @@ function waitFor(pred, timeout = 20000) {
     page.on('pageerror', (e) => consoleLines.push('PAGEERROR: ' + e.message));
 
     await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'load' });
+    check('browser title uses gwasm branding', await page.title() === 'gwasm',
+          await page.title());
 
     const finished = await waitFor(() => page.evaluate(() => window.__e2e && window.__e2e.done));
     const e2e = await page.evaluate(() => window.__e2e || null);
@@ -410,7 +412,7 @@ function waitFor(pred, timeout = 20000) {
         new MouseEvent(type, { bubbles: true, cancelable: true,
                                clientX: x, clientY: y, button }));
 
-      window.gwTouchMode('translate');
+      window.gwasmTouchMode('translate');
       mouse('mousedown', 100, 120); mouse('mousemove', 105, 120); mouse('mouseup', 105, 120);
       const translated = seen.slice();
       const mouseAfterTranslate = mouseSeen;
@@ -420,7 +422,7 @@ function waitFor(pred, timeout = 20000) {
       mouse('mousedown', 200, 200, 2); mouse('mouseup', 200, 200, 2);
       const rightButton = seen.slice();
 
-      window.gwTouchMode('augment');
+      window.gwasmTouchMode('augment');
       seen.length = 0;
       const beforeAugment = mouseSeen;
       mouse('mousedown', 400, 400); mouse('mouseup', 400, 400);
@@ -431,7 +433,7 @@ function waitFor(pred, timeout = 20000) {
       // click emits no touch at all. Emitting one double-handles: the game
       // reads the tap as select and the mouse click as move, the tap wins, and
       // click-to-move stops working.
-      window.gwTouchMode('dbltap');
+      window.gwasmTouchMode('dbltap');
       seen.length = 0;
       mouse('mousedown', 700, 700); mouse('mouseup', 700, 700);
       await new Promise((r) => setTimeout(r, 150));
@@ -450,15 +452,15 @@ function waitFor(pred, timeout = 20000) {
       await new Promise((r) => setTimeout(r, 300));
       const doubleClick = seen.slice();
 
-      window.gwTouchMode('off');
+      window.gwasmTouchMode('off');
       seen.length = 0;
       mouse('mousedown', 300, 300); mouse('mouseup', 300, 300);
       const whenOff = seen.slice();
 
-      window.gwTouchMode('dbltap');
+      window.gwasmTouchMode('dbltap');
       return { translated, rightButton, whenOff, mouseAfterTranslate,
                augmented, mouseDuringAugment, singleClick, doubleClick,
-               hasTap: typeof window.gwTap === 'function' };
+               hasTap: typeof window.gwasmTap === 'function' };
     });
     check('mousedown produces a touchstart',
           touch.translated.some((s) => s.startsWith('touchstart:1:100')), touch.translated);
@@ -500,9 +502,9 @@ function waitFor(pred, timeout = 20000) {
     const harnessSrc = fs.readFileSync(
       path.join(REPO, 'harness', 'harness.js'), 'utf8');
     const defaultMode = (harnessSrc.match(
-      /localStorage\.getItem\('gw\.touchMode'\)\s*\|\|\s*'(\w+)'/) || [])[1];
+      /localStorage\.getItem\('gwasm\.touchMode'\)\s*\|\|\s*'(\w+)'/) || [])[1];
     check('dbltap is the default mode', defaultMode === 'dbltap', defaultMode);
-    check('gwTap helper is exposed', touch.hasTap === true);
+    check('gwasmTap helper is exposed', touch.hasTap === true);
 
     // Pointer lock for right-drag camera. Whether the lock actually engages
     // cannot be tested here -- browsers require real user activation, which a
@@ -536,20 +538,20 @@ function waitFor(pred, timeout = 20000) {
       mouse('mousedown', 0);
       const onLeft = requested - onRightDown;
 
-      window.gwPointerLock(false);
+      window.gwasmPointerLock(false);
       mouse('mousedown', 2);
       const whenDisabled = requested - onRightDown - onLeft;
-      window.gwPointerLock(true);
+      window.gwasmPointerLock(true);
       return { onRightDown, onLeft, whenDisabled, lockedBefore,
-               hasToggle: typeof window.gwPointerLock === 'function' };
+               hasToggle: typeof window.gwasmPointerLock === 'function' };
     });
     check('right mousedown alone does not lock -- that would kill right-click',
           lock.onRightDown === 0,
           `${lock.onRightDown} (lock held before test: ${lock.lockedBefore})`);
     check('left button does not lock', lock.onLeft === 0, lock.onLeft);
-    check('gwPointerLock(false) suppresses it', lock.whenDisabled === 0,
+    check('gwasmPointerLock(false) suppresses it', lock.whenDisabled === 0,
           lock.whenDisabled);
-    check('gwPointerLock toggle is exposed', lock.hasToggle === true);
+    check('gwasmPointerLock toggle is exposed', lock.hasToggle === true);
 
     check('canvas is keyboard-focusable (tabindex 0)', input.tabIndex === 0, input.tabIndex);
     check('canvas holds focus after boot', input.focused === true,
@@ -571,7 +573,7 @@ function waitFor(pred, timeout = 20000) {
         text: a.textContent.trim(), href: a.href,
         target: a.target, rel: a.rel,
       })));
-    check('footer links are present', links.length === 3,
+    check('footer links are present', links.length === 2,
           links.map((l) => l.text).join(','));
     check('footer links open externally and safely',
           links.every((l) => l.target === '_blank'
