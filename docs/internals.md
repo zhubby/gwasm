@@ -272,6 +272,12 @@ The release job re-tests the *unpacked zip* rather than the checkout, so a file
 that only resolves because it happens to sit in the repo is caught before it
 ships.
 
+Each release also publishes `ghcr.io/zhubby/gwasm:<release-tag>` and `latest` as
+a multi-platform image for native `linux/amd64` and `linux/arm64` runtimes. The
+release job checks both tags' manifests after pushing and starts each platform's
+image under its matching runtime or QEMU before considering publication
+successful.
+
 ## Tests
 
 ```bash
