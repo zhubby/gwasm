@@ -1,9 +1,9 @@
-# Cut a release whenever main moves.
+# Validate and package an existing GitHub Release when it is published.
 #
-# The whole suite runs first, and nothing is published unless it passes. That
-# includes tests/test_no_leaks.py, which is the guard against shipping an
-# ArenaNet binary or a credential by accident -- releasing is exactly the moment
-# that guard matters most.
+# The whole suite runs first, and no package or container image is published
+# unless it passes. That includes tests/test_no_leaks.py, which is the guard
+# against shipping an ArenaNet binary or a credential by accident -- packaging
+# a release is exactly the moment that guard matters most.
 #
 # The artifact is a ready-to-run folder, not the source tree: someone
 # downloading a release should be able to unzip it and double-click gwasm.py
@@ -12,25 +12,8 @@
 name: gwasm Release
 
 on:
-  push:
-    branches: [main]
-    # Code only. A README fix, a new screenshot or a tweak to this file does
-    # not change what the game does, and cutting a release for each one buries
-    # the ones that matter. workflow_dispatch publishes on demand regardless;
-    # whatever else has landed since is included either way.
-    paths:
-      - '**.py'
-      - '**.js'
-      - '**.css'
-      - '**.html'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'Dockerfile'
-      - '.dockerignore'
-      - 'compose.yaml'
-      - '.env.example'
-      - '.github/workflows/release.yml'
-  workflow_dispatch:      # so a release can be cut without an empty commit
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -53,6 +36,8 @@ jobs:
         python: ['3.8', '3.13']
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.release.tag_name }}
 
       - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.6.0
         with:
@@ -76,6 +61,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.release.tag_name }}
       - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.6.0
         with:
           python-version: '3.13'
@@ -97,6 +84,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.release.tag_name }}
 
       - name: Build runtime image
         run: docker build --tag gwasm:ci .
@@ -153,16 +142,31 @@ jobs:
     name: Publish
     needs: [test, e2e, container]
     permissions:
-      contents: write      # required only for this job to create the release
+      contents: write      # required to upload the package to the release
       packages: write      # required to publish the runtime image to GHCR
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.release.tag_name }}
 
-      - name: Work out the version
+      - name: Read the release version
         id: v
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          echo "tag=v$(date -u +%Y.%m.%d).${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          set -eu
+          case "$RELEASE_TAG" in
+            ""|[.-]*|*[!A-Za-z0-9_.-]*)
+              echo "::error::Release tag must also be a valid container tag"
+              exit 1
+              ;;
+          esac
+          test "${#RELEASE_TAG}" -le 128 || {
+            echo "::error::Release tag is too long for a container tag"
+            exit 1
+          }
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Assemble the package
         run: |
@@ -207,20 +211,9 @@ jobs:
           docker push "$IMAGE:latest"
           docker push "$IMAGE:${{ steps.v.outputs.tag }}"
 
-      - name: Publish
+      - name: Upload package to release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          gh release create "${{ steps.v.outputs.tag }}" "$ZIP" \
-            --target "${{ github.sha }}" \
-            --title "gwasm ${{ steps.v.outputs.tag }}" \
-            --notes "$(printf '%s\n' \
-              'Unzip and run **gwasm.py** — Python 3.8+, nothing else to install.' \
-              '' \
-              '**This cannot log in yet.** The client boots and reaches' \
-              "ArenaNet's servers, but authentication is not implemented, so" \
-              'there is nothing to enter credentials into. See the README for' \
-              'what does and does not work.' \
-              '' \
-              "Built from \`${{ github.sha }}\`.")"
+          gh release upload "${{ steps.v.outputs.tag }}" "$ZIP" --clobber

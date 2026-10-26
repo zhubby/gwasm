@@ -253,15 +253,16 @@ someone's machine. `e2e.js` asserts it.
 
 ## CI
 
-`.github/workflows/release.yml` runs the suite on every push to `main` and, if
-it passes, publishes a release: a zip of `gwasm.py`, `harness/`, `images/`,
-`fonts/`, the README and the licence -- what someone needs to run it, without
-`tests/`, `tools/` or `docs/`.
+`.github/workflows/release.yml` runs only when a GitHub Release is published.
+It checks out that release's tag, runs the suite, and, if it passes, attaches a
+zip of `gwasm.py`, `harness/`, `images/`, `fonts/`, the README and the licence --
+what someone needs to run it, without `tests/`, `tools/` or `docs/`. Ordinary
+pushes to `main` do not package or publish anything.
 
 Three things it is doing deliberately:
 
-- **`test_no_leaks.py` gates the release.** Publishing is exactly the moment
-  that guard matters, since a release turns a mistake into a download.
+- **`test_no_leaks.py` gates the release artifacts.** Uploading them is exactly
+  the moment that guard matters, since an asset turns a mistake into a download.
 - **No `pip install` anywhere**, and a bare `import gwasm` on a clean interpreter.
   If the zero-dependency property is ever lost, that step is where it breaks.
 - **Python 3.8 and 3.13**, because the README promises 3.8 and an untested
