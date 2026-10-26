@@ -1,7 +1,6 @@
 <!doctype html>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; img-src 'self' data:; font-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'">
-<title>Guild Wars</title>
+<title>gwasm</title>
 <!-- Lives in harness/, so it lands at the served root where the browser asks
      for it anyway; the link tag just saves the speculative 404. -->
 <link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48">
@@ -32,11 +31,9 @@
     <!-- noreferrer as well as noopener: these are external sites and there is
          no reason to hand them the address of a server on someone's machine. -->
     <nav id="loading-links">
+      <a href="https://github.com/zhubby/gwasm" target="_blank" rel="noopener noreferrer">gwasm</a>
+      <span aria-hidden="true">·</span>
       <a href="https://discord.gg/pGS5pFn" target="_blank" rel="noopener noreferrer">Discord</a>
-      <span aria-hidden="true">·</span>
-      <a href="https://github.com/gwdevhub/gw_in_browser" target="_blank" rel="noopener noreferrer">GitHub</a>
-      <span aria-hidden="true">·</span>
-      <a href="https://opencollective.com/gwdevhub_collective" target="_blank" rel="noopener noreferrer">Donate</a>
     </nav>
 
     <!-- Static, not fetched: a disclaimer that only appears when a request

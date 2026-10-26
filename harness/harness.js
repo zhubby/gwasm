@@ -1,5 +1,5 @@
 // Host for Gw.wasm / Gw.jspi.wasm. Every platform service is injected on
-// Module; see CLAUDE.md for the recovered contracts. Serve with gw.py.
+// Module; see CLAUDE.md for the recovered contracts. Serve with gwasm.py.
 //
 // Module MUST be var: the glue does `var Module = typeof Module != 'undefined'
 // ? Module : {}`, and a const/let here collides with it at parse time.
@@ -22,11 +22,11 @@ const log = (...a) => {
   }
 };
 
-window.gwLog = (on = true) => {
+window.gwasmLog = (on = true) => {
   const el = document.getElementById('log');
   el.style.display = on ? 'block' : 'none';
   if (on) { el.textContent = logBuf.join('\n'); el.scrollTop = el.scrollHeight; }
-  localStorage.setItem('gw.log', on ? 'on' : 'off');
+  localStorage.setItem('gwasm.log', on ? 'on' : 'off');
   return on;
 };
 
@@ -70,14 +70,14 @@ const stats = { reads: 0, bytes: 0, fromMemory: 0, fromStore: 0, fromNetwork: 0,
                 coalesced: 0 };
 let burstBytes = 0, burstTimer = null;
 
-window.gwEvictMemory = () => {
+window.gwasmEvictMemory = () => {
   const n = chunkCache.size;
   chunkCache.clear();
   chunkCacheBytes = 0;
   return n;
 };
 
-window.gwStats = () => {
+window.gwasmStats = () => {
   const s = {
     reads: stats.reads,
     readMB: +(stats.bytes / 1048576).toFixed(1),
@@ -270,12 +270,17 @@ Module = {
     const url = useJspi ? 'Gw.jspi.wasm' : 'Gw.wasm';
     (async () => {
       try {
-        const r = await WebAssembly.instantiateStreaming(fetch(url), imports);
+        let r;
+        try {
+          r = await WebAssembly.instantiateStreaming(fetch(url), imports);
+        } catch (e) {
+          log('[warn] streaming instantiate failed, falling back:', e.message);
+          r = await WebAssembly.instantiate(await (await fetch(url)).arrayBuffer(), imports);
+        }
         success(r.instance, r.module);
       } catch (e) {
-        log('[warn] streaming instantiate failed, falling back:', e.message);
-        const r = await WebAssembly.instantiate(await (await fetch(url)).arrayBuffer(), imports);
-        success(r.instance, r.module);
+        log('[err] wasm instantiation failed:', e.message);
+        window.gwasmLoading?.fail('Could not start the game.');
       }
     })();
     return {};   // signals that instantiation is in flight
@@ -363,7 +368,7 @@ Module = {
     },
   },
 
-  // Raw TCP via the relay gw.py runs on this same origin. The glue assigns
+  // Raw TCP via the relay gwasm.py runs on this same origin. The glue assigns
   // onopen/onclose/onmessage on the returned object and calls onmessage with
   // the payload, not an event.
   socket: {
@@ -378,7 +383,7 @@ Module = {
       };
       ws.onopen = () => sock.onopen && sock.onopen();
       ws.onclose = () => sock.onclose && sock.onclose();
-      ws.onerror = () => log('socket error (is gw.py still running?)');
+      ws.onerror = () => log('socket error (is gwasm.py still running?)');
       ws.onmessage = (ev) => sock.onmessage && sock.onmessage(new Uint8Array(ev.data));
       return sock;
     },
@@ -436,8 +441,8 @@ Module = {
   },
 
   // 'onDemand' or 'preload'. The launcher hardcodes onDemand, but that is a
-  // phone; gwPatchMode('preload') switches, read once at image init.
-  getPatchMode: async () => localStorage.getItem('gw.patchMode') || 'onDemand',
+  // phone; gwasmPatchMode('preload') switches, read once at image init.
+  getPatchMode: async () => localStorage.getItem('gwasm.patchMode') || 'onDemand',
 
   // The module narrates its own startup -- the only direct view into which
   // stage it thinks it is in, and what drives the loading bar once the glue
@@ -449,7 +454,7 @@ Module = {
   // (%uKB/sec)" string. The other stages carry no measurable total.
   setStartupProgress(stage, a, b, c, d) {
     log(`[startup] ${stage}`, [a, b, c, d].filter((v) => v !== undefined).join(' '));
-    const L = window.gwLoading;
+    const L = window.gwasmLoading;
     if (!L) return;
     const s = String(stage || '').toLowerCase();
     if (s === 'complete') return L.done();
@@ -496,8 +501,8 @@ function appendGlue(src, candidates) {
 function loadGlue(candidates) {
   const src = candidates[0];
   if (!src) {
-    window.gwLoading?.fail('No game build could be loaded.');
-    return log('[err] no glue could be loaded — check that gw.py finished downloading');
+    window.gwasmLoading?.fail('No game build could be loaded.');
+    return log('[err] no glue could be loaded — check that gwasm.py finished downloading');
   }
   if (wired) return appendGlue(src);
   wired = true;
@@ -556,21 +561,21 @@ function loadGlue(candidates) {
   //
   // Modes: dbltap (default), augment, translate, off. Left button only;
   // right-drag turns the camera and stays as mouse.
-  let touchMode = localStorage.getItem('gw.touchMode') || 'dbltap';
+  let touchMode = localStorage.getItem('gwasm.touchMode') || 'dbltap';
   const DBL_MS = 400, DBL_PX = 10;
   let lastClick = null, pendingTap = null, touchId = 0, active = null;
 
-  window.gwPatchMode = (m) => {
+  window.gwasmPatchMode = (m) => {
     if (!['onDemand', 'preload'].includes(m)) return log(`[warn] unknown patch mode ${m}`);
-    localStorage.setItem('gw.patchMode', m);
+    localStorage.setItem('gwasm.patchMode', m);
     log(`patch mode: ${m} (reload to apply)`);
     return m;
   };
 
-  window.gwTouchMode = (m) => {
+  window.gwasmTouchMode = (m) => {
     if (!['dbltap', 'translate', 'augment', 'off'].includes(m)) return log(`[warn] unknown mode ${m}`);
     touchMode = m;
-    localStorage.setItem('gw.touchMode', m);
+    localStorage.setItem('gwasm.touchMode', m);
     log(`touch mode: ${m}`);
     return m;
   };
@@ -653,13 +658,13 @@ function loadGlue(candidates) {
     }, true);
   }
 
-  window.gwTap = (x, y) => {
+  window.gwasmTap = (x, y) => {
     const t = mkTouch(x, y, ++touchId);
     sendTouch('touchstart', t);
     setTimeout(() => sendTouch('touchend', t), 40);
   };
-  window.gwDoubleTap = (x, y) => { window.gwTap(x, y); setTimeout(() => window.gwTap(x, y), 120); };
-  log(`touch mode: ${touchMode} (gwTouchMode('off') to disable)`);
+  window.gwasmDoubleTap = (x, y) => { window.gwasmTap(x, y); setTimeout(() => window.gwasmTap(x, y), 120); };
+  log(`touch mode: ${touchMode} (gwasmTouchMode('off') to disable)`);
 
   // ---- pointer lock for right-drag camera -------------------------------
   // Without it the cursor leaves the window mid-swing. While locked
@@ -671,12 +676,12 @@ function loadGlue(candidates) {
   // Promoted on movement rather than on mousedown: capturing the cursor the
   // moment the button goes down costs the plain right-click.
   const DRAG_PX = 4;
-  let lockEnabled = localStorage.getItem('gw.pointerLock') !== 'off';
+  let lockEnabled = localStorage.getItem('gwasm.pointerLock') !== 'off';
   let virt = null, rmb = null;
 
-  window.gwPointerLock = (on) => {
+  window.gwasmPointerLock = (on) => {
     lockEnabled = !!on;
-    localStorage.setItem('gw.pointerLock', on ? 'on' : 'off');
+    localStorage.setItem('gwasm.pointerLock', on ? 'on' : 'off');
     if (!on && document.pointerLockElement === c) document.exitPointerLock();
     log(`pointer lock: ${on ? 'enabled' : 'disabled'}`);
     return lockEnabled;
@@ -751,16 +756,16 @@ function loadGlue(candidates) {
 }
 
 (async function boot() {
-  if (localStorage.getItem('gw.log') === 'on') window.gwLog(true);
+  if (localStorage.getItem('gwasm.log') === 'on') window.gwasmLog(true);
 
-  // gw.py serves the page before it has finished fetching the client, so that
+  // gwasm.py serves the page before it has finished fetching the client, so that
   // this screen can show the download rather than the user staring at a
   // terminal. Nothing below can run until those files exist.
-  if (!await window.gwLoading.waitForClient()) return;
-  window.gwLoading.set('Preparing…', null);
+  if (!await window.gwasmLoading.waitForClient()) return;
+  window.gwasmLoading.set('Preparing…', null);
 
   try {
-    chunkStore = await caches.open('gw.chunks.v1');
+    chunkStore = await caches.open('gwasm.chunks.v1');
     for (const req of await chunkStore.keys()) storedHashes.add(hashOfKey(req.url));
     if (storedHashes.size) log(`chunk store: ${storedHashes.size} chunks already resident`);
   } catch (e) {
@@ -806,7 +811,7 @@ function loadGlue(candidates) {
 
   // Fall back if the preferred glue is absent: the pair downloaded may not be
   // the pair this browser would pick.
-  window.gwLoading.set('Starting the game…', null);
+  window.gwasmLoading.set('Starting the game…', null);
   loadGlue(jspi ? ['Gw.jspi.js', 'Gw.js'] : ['Gw.js', 'Gw.jspi.js']);
 })();
 

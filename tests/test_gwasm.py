@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for gw.py -- framing, the address rules, ranges, the lazy snapshot
+"""Tests for gwasm.py -- framing, the address rules, ranges, the lazy snapshot
 and the proxy.
 
 Everything ArenaNet-side is replaced by local fixtures, so this runs offline.
@@ -8,7 +8,7 @@ restricted to public addresses, so a loopback fixture cannot stand in for a
 real peer. Every branch that decides whether to open a socket at all is
 covered, which is where a mistake would be most costly.
 
-  python3 tests/test_gw.py
+  python3 tests/test_gwasm.py
 """
 
 import base64
@@ -23,11 +23,12 @@ import time
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 from urllib.request import urlopen, Request
 from urllib.error import HTTPError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import gw
+import gwasm
 
 FAILED = []
 
@@ -43,7 +44,7 @@ def check(name, cond, extra=""):
 def test_framing():
     for n, name in ((5, "7-bit"), (200, "16-bit"), (70000, "64-bit")):
         payload = os.urandom(n)
-        f = gw.frame(payload)
+        f = gwasm.frame(payload)
         check("frame %s length" % name, f[0] == 0x82 and len(f) > n)
 
         # Mask it the way a browser would, then read it back.
@@ -52,33 +53,33 @@ def test_framing():
         hdr = bytearray(f[:len(f) - n])
         hdr[1] |= 0x80
         wire = bytes(hdr) + mask + body
-        got = gw.unframe(wire)
+        got = gwasm.unframe(wire)
         check("unframe %s" % name, got and got[0] == 0x2 and got[1] == payload)
-        check("unframe %s partial yields None" % name, gw.unframe(wire[:-1]) is None)
+        check("unframe %s partial yields None" % name, gwasm.unframe(wire[:-1]) is None)
 
     # Server frames must be unmasked with FIN set.
-    check("server frame unmasked", not (gw.frame(b"x")[1] & 0x80))
+    check("server frame unmasked", not (gwasm.frame(b"x")[1] & 0x80))
 
     # Two frames in one chunk: the second must survive as `rest`.
     a, b = os.urandom(4), os.urandom(4)
     def masked(p):
         m = os.urandom(4)
         return bytes([0x82, 0x80 | len(p)]) + m + bytes(x ^ m[i & 3] for i, x in enumerate(p))
-    got = gw.unframe(masked(a) + masked(b))
-    check("coalesced frames", got and got[1] == a and gw.unframe(got[2])[1] == b)
+    got = gwasm.unframe(masked(a) + masked(b))
+    check("coalesced frames", got and got[1] == a and gwasm.unframe(got[2])[1] == b)
 
     def rejects(frame):
         try:
-            gw.unframe(frame)
+            gwasm.unframe(frame)
         except ValueError:
             return True
         return False
 
-    check("rejects unmasked client frame", rejects(gw.frame(b"x")))
+    check("rejects unmasked client frame", rejects(gwasm.frame(b"x")))
     check("rejects fragmented frame", rejects(bytes([0x02, 0x80, 0, 0, 0, 0])))
     check("rejects RSV bits", rejects(bytes([0xC2, 0x80, 0, 0, 0, 0])))
     check("rejects oversized frame", rejects(
-        bytes([0x82, 0xFF]) + struct.pack("!Q", gw.MAX_WS_FRAME + 1)))
+        bytes([0x82, 0xFF]) + struct.pack("!Q", gwasm.MAX_WS_FRAME + 1)))
     check("rejects oversized control frame", rejects(
         bytes([0x89, 0xFE, 0, 126, 0, 0, 0, 0])))
 
@@ -88,21 +89,48 @@ def test_framing():
 def test_allowlists():
     for name in ("arenanetworks.com", "File1.ArenaNetworks.com", "guildwars.com",
                  "a.b.guildwars.com", "arenanetworks.com."):
-        check("allow %s" % name, gw.allowed_name(name))
+        check("allow %s" % name, gwasm.allowed_name(name))
     # The suffix check must not be foolable by a lookalike.
     for name in ("arenanetworks.com.evil.com", "evil.com", "notarenanetworks.com",
                  "xarenanetworks.com", ""):
-        check("deny %s" % (name or "(empty)"), not gw.allowed_name(name))
+        check("deny %s" % (name or "(empty)"), not gwasm.allowed_name(name))
 
     for ip in ("127.0.0.1", "10.0.0.1", "169.254.169.254", "172.16.0.1",
                "172.31.255.255", "192.168.1.1", "100.64.0.1", "0.0.1.2",
                "224.0.0.1", "255.255.255.255", "::1", "::", "fe80::1", "fc00::1",
                "ff02::1", "2001:db8::1", "::ffff:127.0.0.1", "not.an.ip", "1.2.3"):
-        check("not dialable %s" % ip, not gw.is_public_ip(ip))
+        check("not dialable %s" % ip, not gwasm.is_public_ip(ip))
     # 172.15 and 172.32 sit just outside RFC1918 and must not be caught by it.
     for ip in ("8.8.8.8", "54.196.189.234", "172.15.0.1", "172.32.0.1",
                "2606:4700::1", "::ffff:8.8.8.8"):
-        check("dialable %s" % ip, gw.is_public_ip(ip))
+        check("dialable %s" % ip, gwasm.is_public_ip(ip))
+
+
+def test_origins():
+    check("normalizes origin host",
+          gwasm.normalize_origin("HTTP://Example.COM:8080") == "http://example.com:8080")
+    check("normalizes default HTTP port",
+          gwasm.normalize_origin("http://example.com:80") == "http://example.com")
+    check("normalizes websocket CSP source",
+          gwasm.websocket_origins({"http://example.com:8080", "https://secure.example:443"})
+          == ["ws://example.com:8080", "wss://secure.example"])
+    for value, why in (("ftp://example.com:8080", "scheme"),
+                       ("http://example.com", "missing port"),
+                       ("http://example.com:8080/", "path"),
+                       ("http://example.com:8080/path", "path"),
+                       ("http://example.com:8080?x=1", "query"),
+                       ("http://example.com:8080?", "empty query"),
+                       ("http://example.com:8080#", "empty fragment"),
+                       ("http://*.example.com:8080", "wildcard"),
+                       ("http://@example.com:8080", "empty userinfo"),
+                       ("http://user@example.com:8080", "userinfo"),
+                       ("http://example.com:not-a-port", "port")):
+        try:
+            gwasm.normalize_origin(value)
+        except ValueError:
+            check("rejects origin %s" % why, True)
+        else:
+            check("rejects origin %s" % why, False)
 
 
 # ---- DNS wire format ------------------------------------------------------
@@ -133,7 +161,7 @@ def test_dns_parse():
 
     socket.socket = FakeSock
     try:
-        check("dns parses A record", gw._dns_query("File.gw.com", "1.1.1.1") == "9.8.7.6")
+        check("dns parses A record", gwasm._dns_query("File.gw.com", "1.1.1.1") == "9.8.7.6")
         sent = served["sent"]
         check("dns query is well formed",
               sent[2:4] == b"\x01\x00" and b"\x04File" in sent and sent[-4:] == b"\x00\x01\x00\x01")
@@ -142,7 +170,7 @@ def test_dns_parse():
         # check is the only thing standing between us and an off-path forgery.
         served["corrupt"] = 0xFFFF
         try:
-            gw._dns_query("File.gw.com", "1.1.1.1")
+            gwasm._dns_query("File.gw.com", "1.1.1.1")
             check("dns rejects mismatched id", False)
         except OSError:
             check("dns rejects mismatched id", True)
@@ -150,7 +178,7 @@ def test_dns_parse():
 
         served["rcode"] = 3
         try:
-            gw._dns_query("File.gw.com", "1.1.1.1")
+            gwasm._dns_query("File.gw.com", "1.1.1.1")
             check("dns raises on NXDOMAIN", False)
         except OSError as e:
             check("dns raises on NXDOMAIN", "rcode 3" in str(e), str(e))
@@ -199,9 +227,9 @@ class Origin(BaseHTTPRequestHandler):
     do_GET = do_POST = _reply
 
 
-def serve(directory, port=0):
-    httpd = ThreadingHTTPServer(("127.0.0.1", port),
-                                partial(gw.Handler, directory=str(directory)))
+def serve(directory, port=0, bind="127.0.0.1"):
+    httpd = ThreadingHTTPServer((bind, port),
+                                partial(gwasm.Handler, directory=str(directory)))
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return httpd
 
@@ -217,6 +245,26 @@ def req(url, rng=None, method="GET", body=None, headers=None):
         return e.code, e.headers, e.read()
 
 
+def status_with_length(url, length):
+    """Send only oversized headers so the server can reject before a body."""
+    parts = urlsplit(url)
+    sock = socket.create_connection((parts.hostname, parts.port), 10)
+    try:
+        request = ("POST %s HTTP/1.1\r\nHost: %s:%d\r\n"
+                   "Content-Length: %d\r\nConnection: close\r\n\r\n"
+                   % (parts.path, parts.hostname, parts.port, length))
+        sock.sendall(request.encode())
+        head = b""
+        while b"\r\n" not in head:
+            chunk = sock.recv(1)
+            if not chunk:
+                return None
+            head += chunk
+        return int(head.split()[1])
+    finally:
+        sock.close()
+
+
 # ---- server ---------------------------------------------------------------
 
 def test_server(tmp):
@@ -226,13 +274,13 @@ def test_server(tmp):
 
     origin = ThreadingHTTPServer(("127.0.0.1", 0), Origin)
     threading.Thread(target=origin.serve_forever, daemon=True).start()
-    gw.PROXY_TEMPLATE = "http://127.0.0.1:%d/{route}" % origin.server_address[1]
+    gwasm.PROXY_TEMPLATE = "http://127.0.0.1:%d/{route}" % origin.server_address[1]
 
-    gw.Handler.store = gw.ChunkStore(index, None)  # offline: no fetching
-    gw.Handler.proxy_http = gw.Http()
+    gwasm.Handler.store = gwasm.ChunkStore(index, None)  # offline: no fetching
+    gwasm.Handler.proxy_http = gwasm.Http()
     httpd = serve(tmp)
     port = httpd.server_address[1]
-    gw.Handler.origins = {"http://127.0.0.1:%d" % port}
+    gwasm.Handler.origins = {"http://127.0.0.1:%d" % port}
     base = "http://127.0.0.1:%d" % port
 
     try:
@@ -240,9 +288,31 @@ def test_server(tmp):
         s, h, b = req(base + "/Gw.jspi.wasm")
         check("wasm mime", h.get("Content-Type") == "application/wasm", h.get("Content-Type"))
         check("accept-ranges advertised", h.get("Accept-Ranges") == "bytes")
-        check("content security policy advertised", "default-src 'self'" in h.get("Content-Security-Policy", ""))
+        csp = h.get("Content-Security-Policy", "")
+        check("content security policy advertised", "default-src 'self'" in csp)
+        check("CSP allows WebAssembly compilation",
+              "script-src 'self' 'wasm-unsafe-eval'" in csp)
+        check("CSP still denies arbitrary eval", "'unsafe-eval'" not in csp)
+        check("default CSP allows exact websocket origin",
+              "ws://127.0.0.1:%d" % port in csp)
+        check("default CSP has no websocket wildcard",
+              "ws://*" not in csp and "ws:*" not in csp)
         check("nosniff advertised", h.get("X-Content-Type-Options") == "nosniff")
         check("referrer policy advertised", h.get("Referrer-Policy") == "no-referrer")
+
+        lan_origin = "http://192.168.1.20:%d" % port
+        gwasm.Handler.origins = {lan_origin}
+        s, h, _ = req(base + "/index.html")
+        csp = h.get("Content-Security-Policy", "")
+        check("LAN CSP allows configured websocket origin",
+              "ws://192.168.1.20:%d" % port in csp)
+        check("LAN CSP excludes loopback websocket origins",
+              "ws://127.0.0.1" not in csp and "ws://localhost" not in csp)
+        check("configured origin reaches relay validation",
+              ws_status(port, "not-an-ip", origin=lan_origin) == 400)
+        check("unconfigured origin denied after LAN configuration",
+              ws_status(port, "not-an-ip", origin=base) == 403)
+        gwasm.Handler.origins = {base}
 
         whole = (tmp / "Gw.jspi.wasm").read_bytes()
         s, h, b = req(base + "/Gw.jspi.wasm", "bytes=10-19")
@@ -268,12 +338,12 @@ def test_server(tmp):
 
         # -- a chunk that is not cached, with no session to fetch it
         truth2, index2 = build_snapshot(tmp / "partial", cached_only=False)
-        gw.Handler.store = gw.ChunkStore(index2, None)
+        gwasm.Handler.store = gwasm.ChunkStore(index2, None)
         s, _, _ = req(base + "/Gw.snapshot", "bytes=0-15")
         check("uncached chunk 0 still served", s == 206)
         s, _, _ = req(base + "/Gw.snapshot", "bytes=%d-%d" % (CHUNK, CHUNK + 15))
         check("missing chunk 503", s == 503, str(s))
-        gw.Handler.store = gw.ChunkStore(index, None)
+        gwasm.Handler.store = gwasm.ChunkStore(index, None)
 
         # -- proxy
         s, _, b = req(base + "/webgate/session/create.xml")
@@ -282,8 +352,10 @@ def test_server(tmp):
         s, _, b = req(base + "/webgate/post", method="POST", body=b"hello",
                       headers={"Content-Type": "text/plain"})
         check("proxy POST", s == 200 and json.loads(b)["method"] == "POST")
-        s, _, _ = req(base + "/webgate/post", method="POST",
-                      body=b"x" * (8 * 1024 * 1024 + 1))
+        s, _, _ = req(base + "/webgate/post", method="POST", body=b"hello",
+                      headers={"Origin": "http://evil.example"})
+        check("proxy rejects foreign origin", s == 403, str(s))
+        s = status_with_length(base + "/webgate/post", 8 * 1024 * 1024 + 1)
         check("oversized proxy body refused", s == 413, str(s))
         s, _, _ = req(base + "/webgate/post", method="POST", body=b"hello",
                       headers={"Content-Length": "invalid"})
@@ -291,7 +363,7 @@ def test_server(tmp):
         s, _, _ = req(base + "/webgate/denied")
         check("proxy passes upstream 401 through", s == 401, str(s))
 
-        gw.PROXY_TEMPLATE = None
+        gwasm.PROXY_TEMPLATE = None
         s, _, b = req(base + "/nosuchroute/x")
         check("unknown route 502s by name", s == 502 and b"nosuchroute" in b, str(s))
         s, _, b = req(base + "/index.html")
@@ -323,6 +395,14 @@ def test_server(tmp):
         origin.shutdown()
 
 
+def test_bind_address(tmp):
+    httpd = serve(tmp, bind="0.0.0.0")
+    try:
+        check("server accepts wildcard bind", httpd.server_address[0] == "0.0.0.0")
+    finally:
+        httpd.shutdown()
+
+
 def ws_status(port, dest, origin="auto", version="13"):
     s = socket.create_connection(("127.0.0.1", port), 10)
     try:
@@ -352,18 +432,18 @@ def test_manifest():
     raw = {"compressionMode": "none", "chunkSize": 4,
            "files": [{"name": "a.bin", "size": 6,
                       "chunkHashes": ["a" * 64, "b" * 64]}]}
-    mf = gw.Manifest(raw)
+    mf = gwasm.Manifest(raw)
     check("manifest flat file", mf.find("a.bin") == "a.bin")
 
     bad = dict(raw, files=[{"name": "a", "size": 99, "chunkHashes": ["x"]}])
     try:
-        gw.Manifest(bad)
+        gwasm.Manifest(bad)
         check("manifest rejects chunk count mismatch", False)
     except ValueError:
         check("manifest rejects chunk count mismatch", True)
 
     try:
-        gw.Manifest(dict(raw, compressionMode="brotli"))
+        gwasm.Manifest(dict(raw, compressionMode="brotli"))
         check("manifest rejects unknown compression", False)
     except ValueError:
         check("manifest rejects unknown compression", True)
@@ -380,20 +460,20 @@ def test_manifest():
                                                "chunkHashes": ["x"]}]}),
     ):
         try:
-            gw.Manifest({"compressionMode": "none", "chunkSize": 4, **bad})
+            gwasm.Manifest({"compressionMode": "none", "chunkSize": 4, **bad})
             check("manifest rejects %s" % label, False)
         except ValueError:
             check("manifest rejects %s" % label, True)
 
-    for jobs in (1, gw.MAX_JOBS):
+    for jobs in (1, gwasm.MAX_JOBS):
         try:
-            gw.validate_jobs(jobs)
+            gwasm.validate_jobs(jobs)
             check("download jobs accepts %d" % jobs, True)
         except ValueError:
             check("download jobs accepts %d" % jobs, False)
-    for jobs in (0, gw.MAX_JOBS + 1):
+    for jobs in (0, gwasm.MAX_JOBS + 1):
         try:
-            gw.validate_jobs(jobs)
+            gwasm.validate_jobs(jobs)
             check("download jobs rejects %d" % jobs, False)
         except ValueError:
             check("download jobs rejects %d" % jobs, True)
@@ -415,7 +495,7 @@ def test_lazy_fetch(tmp):
             time.sleep(0.05)  # widen the window for the duplicate-fetch race
             return pieces[h]
 
-    store = gw.ChunkStore(index, FakeHttp())
+    store = gwasm.ChunkStore(index, FakeHttp())
     check("lazy read is correct", store.read(CHUNK, 16) == truth[CHUNK:CHUNK + 16])
     for start, length in ((-1, 1), (0, -1)):
         try:
@@ -437,20 +517,20 @@ def test_lazy_fetch(tmp):
     check("corrupt cached chunk is refetched",
           store.read(0, 16) == truth[:16] and
           calls == [idx["chunkHashes"][0]], str(calls))
-    real_chunk_matches = gw.chunk_matches
+    real_chunk_matches = gwasm.chunk_matches
     hash_checks = [0]
-    gw.chunk_matches = lambda *args: (hash_checks.__setitem__(0, hash_checks[0] + 1)
+    gwasm.chunk_matches = lambda *args: (hash_checks.__setitem__(0, hash_checks[0] + 1)
                                       or real_chunk_matches(*args))
     try:
         store.read(0, 16)
     finally:
-        gw.chunk_matches = real_chunk_matches
+        gwasm.chunk_matches = real_chunk_matches
     check("verified cache avoids repeated hashing", hash_checks[0] == 0,
           str(hash_checks[0]))
 
     # Concurrent readers of one uncached chunk must fetch it exactly once.
     calls.clear()
-    store2 = gw.ChunkStore(index, FakeHttp())
+    store2 = gwasm.ChunkStore(index, FakeHttp())
     for h in idx["chunkHashes"][2:]:
         (cache / h).unlink(missing_ok=True)
     threads = [threading.Thread(target=lambda: store2.read(CHUNK * 2, 8)) for _ in range(6)]
@@ -465,7 +545,7 @@ def test_lazy_fetch(tmp):
     class LyingHttp:
         def get(self, url, tries=4): return b"not the right bytes"
     try:
-        gw.ChunkStore(bad_idx, LyingHttp()).read(0, 8)
+        gwasm.ChunkStore(bad_idx, LyingHttp()).read(0, 8)
         check("hash mismatch refused", False)
     except ValueError:
         check("hash mismatch refused", True)
@@ -475,10 +555,10 @@ def test_lazy_fetch(tmp):
     materialized = tmp / "materialized.bin"
     materialized.write_bytes(truth)
     check("manifest-matched file is accepted",
-          gw.file_matches(materialized, entry, CHUNK))
+          gwasm.file_matches(materialized, entry, CHUNK))
     materialized.write_bytes(b"x" * len(truth))
     check("same-size changed file is rejected",
-          not gw.file_matches(materialized, entry, CHUNK))
+          not gwasm.file_matches(materialized, entry, CHUNK))
 
 
 def test_boot_recording(tmp):
@@ -496,7 +576,7 @@ def test_boot_recording(tmp):
             calls.append(h)
             return pieces[h]
 
-    store = gw.ChunkStore(index, FakeHttp())
+    store = gwasm.ChunkStore(index, FakeHttp())
     store.read(CHUNK, 16)          # chunk 1
     store.read(CHUNK * 2, 16)      # chunk 2
     check("touched set recorded", store.touched == {1, 2}, str(store.touched))
@@ -507,7 +587,7 @@ def test_boot_recording(tmp):
 
     # A later, shorter boot must not shrink the list -- an early abort would
     # otherwise throw away everything a full boot learned.
-    store2 = gw.ChunkStore(index, FakeHttp())
+    store2 = gwasm.ChunkStore(index, FakeHttp())
     store2.read(0, 16)
     store2.save_touched()
     got = json.loads(store2.boot_list.read_text())
@@ -519,8 +599,8 @@ def test_boot_recording(tmp):
         (cache / h).unlink(missing_ok=True)
     (cache / idx["chunkHashes"][1]).write_bytes(pieces[idx["chunkHashes"][1]])
     calls.clear()
-    store3 = gw.ChunkStore(index, FakeHttp())
-    store3.prefetch(gw.Progress(), jobs=2)
+    store3 = gwasm.ChunkStore(index, FakeHttp())
+    store3.prefetch(gwasm.Progress(), jobs=2)
     check("prefetch fetches only uncached working-set chunks",
           sorted(calls) == sorted([idx["chunkHashes"][0], idx["chunkHashes"][2]]),
           str(len(calls)))
@@ -529,12 +609,12 @@ def test_boot_recording(tmp):
         (cache / h).unlink(missing_ok=True)
     calls.clear()
     cancelled = threading.Event(); cancelled.set()
-    store3.prefetch(gw.Progress(), jobs=2, stop=cancelled)
+    store3.prefetch(gwasm.Progress(), jobs=2, stop=cancelled)
     check("prefetch honours cancellation", calls == [], str(calls))
 
     # Offline must not attempt any of this.
     calls.clear()
-    gw.ChunkStore(index, None).prefetch(gw.Progress())
+    gwasm.ChunkStore(index, None).prefetch(gwasm.Progress())
     check("prefetch is a no-op offline", calls == [], str(calls))
 
 
@@ -553,8 +633,8 @@ def test_download_all(tmp):
             calls.append(h)
             return pieces[h]
 
-    store = gw.ChunkStore(index, FakeHttp())
-    prog = gw.Progress()
+    store = gwasm.ChunkStore(index, FakeHttp())
+    prog = gwasm.Progress()
     ok = store.download_all(prog, 2, threading.Event())
     check("download_all reports success", ok is True)
     check("download_all fetched every missing chunk",
@@ -568,7 +648,7 @@ def test_download_all(tmp):
     # Resume: nothing left to do, and it must not refetch.
     calls.clear()
     check("second run is a no-op",
-          store.download_all(gw.Progress(), 2, threading.Event()) is True and calls == [],
+          store.download_all(gwasm.Progress(), 2, threading.Event()) is True and calls == [],
           str(calls))
 
     # A stop request mid-run must abandon rather than finish.
@@ -577,27 +657,27 @@ def test_download_all(tmp):
     ev = threading.Event(); ev.set()
     calls.clear()
     check("stop event abandons the download",
-          store.download_all(gw.Progress(), 2, ev) is False and calls == [], str(calls))
+          store.download_all(gwasm.Progress(), 2, ev) is False and calls == [], str(calls))
 
     # Not enough disk: refuse up front rather than fail part-way through.
-    real = gw.shutil.disk_usage
-    gw.shutil.disk_usage = lambda p: type("U", (), {"free": 1})()
+    real = gwasm.shutil.disk_usage
+    gwasm.shutil.disk_usage = lambda p: type("U", (), {"free": 1})()
     try:
-        prog = gw.Progress()
+        prog = gwasm.Progress()
         check("refuses when the disk is too small",
               store.download_all(prog, 2, threading.Event()) is False)
         check("disk refusal is reported to the screen",
               "disk space" in (prog.snapshot()["error"] or ""),
               str(prog.snapshot()["error"]))
     finally:
-        gw.shutil.disk_usage = real
+        gwasm.shutil.disk_usage = real
 
     # A chunk that cannot be fetched is reported, not silently skipped.
     class BadHttp:
         def get(self, url, tries=4): raise OSError("boom")
-    prog = gw.Progress()
+    prog = gwasm.Progress()
     check("failed chunks surface as an error",
-          gw.ChunkStore(index, BadHttp()).download_all(prog, 2, threading.Event()) is False
+          gwasm.ChunkStore(index, BadHttp()).download_all(prog, 2, threading.Event()) is False
           and "could not be downloaded" in (prog.snapshot()["error"] or ""),
           str(prog.snapshot()["error"]))
 
@@ -610,7 +690,7 @@ def test_watchdog():
 
     def watchdog(grace=0.4):
         h = FakeHttpd()
-        w = gw.Watchdog(h)
+        w = gwasm.Watchdog(h)
         w.GRACE, w.IDLE = grace, 5.0
         threading.Thread(target=w.run, daemon=True).start()
         return h, w
@@ -662,16 +742,16 @@ def test_watchdog():
 
 
 def test_install_check(tmp):
-    """gw.py must refuse to start legibly when its files are not beside it."""
+    """gwasm.py must refuse to start legibly when its files are not beside it."""
     import subprocess
-    gwpy = Path(__file__).resolve().parent.parent / "gw.py"
+    gwasmpy = Path(__file__).resolve().parent.parent / "gwasm.py"
 
     def run(where):
         where.mkdir(parents=True, exist_ok=True)
-        (where / "gw.py").write_bytes(gwpy.read_bytes())
+        (where / "gwasm.py").write_bytes(gwasmpy.read_bytes())
         # stdin closed: die() must not block when nobody is watching, or this
         # hangs here exactly as it would in CI.
-        return subprocess.run([sys.executable, "gw.py", "--no-browser"],
+        return subprocess.run([sys.executable, "gwasm.py", "--no-browser"],
                               cwd=str(where), stdin=subprocess.DEVNULL,
                               capture_output=True, text=True, timeout=60)
 
@@ -682,22 +762,24 @@ def test_install_check(tmp):
 
     # Windows extracts a double-clicked file to a temp path that still has the
     # zip's name in it, which is the likeliest way anyone hits this.
-    r = run(tmp / "Temp1_gw.zip" / "gw_in_browser")
+    r = run(tmp / "Temp1_gwasm.zip" / "gwasm")
     check("recognises being run from inside a zip",
           "still inside the zip" in r.stderr, r.stderr[:120])
 
     # A complete copy must get past the check and start serving.
     good = tmp / "good"
     (good / "harness").mkdir(parents=True, exist_ok=True)
-    src = gwpy.parent / "harness"
-    for f in gw.REQUIRED:
-        (good / f).write_bytes((gwpy.parent / f).read_bytes())
-    (good / "gw.py").write_bytes(gwpy.read_bytes())
-    r = subprocess.run([sys.executable, "gw.py", "--help"], cwd=str(good),
+    src = gwasmpy.parent / "harness"
+    for f in gwasm.REQUIRED:
+        (good / f).write_bytes((gwasmpy.parent / f).read_bytes())
+    (good / "gwasm.py").write_bytes(gwasmpy.read_bytes())
+    r = subprocess.run([sys.executable, "gwasm.py", "--help"], cwd=str(good),
                        capture_output=True, text=True, timeout=60)
     check("a complete copy passes the check", r.returncode == 0, r.stderr[:120])
+    check("help documents bind address", "--bind" in r.stdout)
+    check("help documents allowed origin", "--origin" in r.stdout)
 
-    r = subprocess.run([sys.executable, "gw.py", "-j", str(gw.MAX_JOBS + 1),
+    r = subprocess.run([sys.executable, "gwasm.py", "-j", str(gwasm.MAX_JOBS + 1),
                         "--no-browser"], cwd=str(good),
                        capture_output=True, text=True, timeout=60)
     check("rejects excessive download concurrency", r.returncode == 2,
@@ -708,10 +790,12 @@ def main():
     import tempfile
     test_framing()
     test_allowlists()
+    test_origins()
     test_dns_parse()
     test_manifest()
     test_watchdog()
     with tempfile.TemporaryDirectory() as td:
+        test_bind_address(Path(td))
         test_server(Path(td))
         test_lazy_fetch(Path(td) / "lazy")
         test_boot_recording(Path(td) / "boot")

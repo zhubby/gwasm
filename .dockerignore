@@ -1,0 +1,28 @@
+.git
+.github
+.venv
+venv
+node_modules
+__pycache__
+*.py[cod]
+
+# Development-only sources and tooling.
+tests
+tools
+docs
+package.json
+package-lock.json
+
+# Derived or user-provided game artifacts.
+dist
+dist-release
+gwpatch-cache
+*.key
+*.apk
+*.wasm
+*.wasm.debug
+Gw.js
+Gw.jspi.js
+Gw.snapshot
+manifest.json
+version.json

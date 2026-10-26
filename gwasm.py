@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Run Guild Wars in your browser. Double-click this file, or:
+"""gwasm runs Guild Wars in your browser. Double-click this file, or:
 
-    python3 gw.py
+    python3 gwasm.py
 
 It downloads what it needs on first run, serves it, and opens a browser.
 Nothing to install -- Python 3.8+ and its standard library are enough.
@@ -23,6 +23,7 @@ import mimetypes
 import os
 import re
 import select
+import signal
 import shutil
 import socket
 import struct
@@ -35,6 +36,7 @@ from functools import partial
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 
 # ArenaNet's client key, lifted from the public app bundle. It identifies the
 # client to the patch CDN; it does not authenticate a user. Hardcoded so this
@@ -42,7 +44,7 @@ from pathlib import Path
 ACCESS_KEY = "2043FE79-F32D-4FD7-8C27-0D47231C4F03"
 
 PATCH_ROOT = "https://patching.1.arenanetworks.com"
-UA = "gwpatch/0.2 (interop research)"
+UA = "gwasm/0.2 (interop research)"
 SNAPSHOT = "Gw.snapshot"
 
 # instantiateStreaming is strict about this and older Pythons do not know it.
@@ -127,7 +129,7 @@ def die(*lines):
     sys.exit(1)
 
 
-# What has to sit next to gw.py. images/ and fonts/ are deliberately not here:
+# What has to sit next to gwasm.py. images/ and fonts/ are deliberately not here:
 # without them the loading screen falls back to a gradient and a stock
 # typeface, which is a worse-looking game rather than a broken one.
 REQUIRED = [
@@ -142,7 +144,7 @@ REQUIRED = [
 def check_install(here):
     """Refuse to start, legibly, when this copy cannot work."""
     if sys.version_info < (3, 8):
-        die("Guild Wars needs Python 3.8 or newer.",
+        die("gwasm needs Python 3.8 or newer.",
             "",
             "This is Python %d.%d, at %s."
             % (sys.version_info[0], sys.version_info[1], sys.executable),
@@ -156,26 +158,26 @@ def check_install(here):
 
     # Windows opens a zip like a folder and, on double-click, extracts only the
     # file you clicked into a temp directory whose path still contains the
-    # zip's name. gw.py then starts completely alone, which is much the most
+    # zip's name. gwasm.py then starts completely alone, which is much the most
     # likely way for anyone to end up here.
     if ".zip" in str(here).lower():
-        die("Guild Wars cannot start: it is still inside the zip.",
+        die("gwasm cannot start: it is still inside the zip.",
             "",
-            "Double-clicking gw.py inside a zip runs only that one file,",
+            "Double-clicking gwasm.py inside a zip runs only that one file,",
             "without the rest of the game beside it.",
             "",
             "Extract the whole zip to a real folder first -- right-click it",
-            "and choose \"Extract All\" -- then run gw.py from there.")
+            "and choose \"Extract All\" -- then run gwasm.py from there.")
 
-    die(*(["Guild Wars cannot start: some of its files are missing.",
+    die(*(["gwasm cannot start: some of its files are missing.",
            "",
            "Looked in: %s" % here,
            "",
            "Missing:"]
           + ["  " + f for f in missing]
           + ["",
-             "gw.py needs its harness folder beside it. Download the project",
-             "again and keep the folder together rather than moving gw.py out",
+             "gwasm.py needs its harness folder beside it. Download the project",
+             "again and keep the folder together rather than moving gwasm.py out",
              "on its own."]))
 
 
@@ -894,7 +896,7 @@ class ChunkStore:
 # ---- DNS ------------------------------------------------------------------
 
 ALLOWED_DOMAINS = [d.strip().lower() for d in os.environ.get(
-    "GW_RELAY_DOMAINS", "arenanetworks.com,guildwars.com").split(",") if d.strip()]
+    "GWASM_RELAY_DOMAINS", "arenanetworks.com,guildwars.com").split(",") if d.strip()]
 FALLBACK_DNS = ["1.1.1.1", "8.8.8.8"]
 
 
@@ -979,11 +981,11 @@ def _system_resolvers():
 
 
 # ---- the relay's address rules --------------------------------------------
-# A WebSocket-to-TCP bridge on localhost is an open proxy: every page in the
-# browser can reach it, not just ours. Without limits, any site you visit could
+# A WebSocket-to-TCP bridge is an open proxy: every page from an accepted
+# origin can reach it, not just ours. Without limits, any site you visit could
 # use it to reach hosts on your LAN it could never reach directly. So:
 #
-#   * bind 127.0.0.1 only, never a routable interface
+#   * bind 127.0.0.1 by default; LAN mode requires explicit origins
 #   * /dns resolves names under ALLOWED_DOMAINS and nothing else
 #   * dial only public unicast addresses -- loopback, LAN and link-local out
 #   * destination ports allowlisted
@@ -996,14 +998,54 @@ def _system_resolvers():
 # page could not reach itself -- a property of the address, so test the address.
 
 ALLOWED_PORTS = {int(p) for p in os.environ.get(
-    "GW_RELAY_PORTS", "6112,80,443").replace(" ", "").split(",") if p}
+    "GWASM_RELAY_PORTS", "6112,80,443").replace(" ", "").split(",") if p}
 CONNECT_TIMEOUT = 10
+
+
+def normalize_origin(value):
+    """Return an exact, browser-serialised origin for the relay allowlist."""
+    raw = value.strip()
+    try:
+        parsed = urlsplit(raw)
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        raise ValueError("origin has an invalid host or port")
+    scheme = parsed.scheme.lower()
+    if scheme not in ("http", "https"):
+        raise ValueError("origin must use http:// or https://")
+    if (not hostname or "@" in parsed.netloc or parsed.username is not None
+            or parsed.password is not None):
+        raise ValueError("origin must contain only a scheme, host and port")
+    if parsed.port is None:
+        raise ValueError("origin must include an explicit port")
+    if "*" in hostname:
+        raise ValueError("origin must not contain wildcards")
+    if parsed.path or parsed.query or parsed.fragment or "?" in raw or "#" in raw:
+        raise ValueError("origin must not contain a path, query or fragment")
+
+    host = hostname.lower()
+    if ":" in host:
+        host = "[%s]" % host
+    default_port = (scheme == "http" and port == 80) or (scheme == "https" and port == 443)
+    netloc = host if port is None or default_port else "%s:%d" % (host, port)
+    return "%s://%s" % (scheme, netloc)
+
+
+def websocket_origins(origins):
+    """Translate HTTP origins into the exact WebSocket CSP sources."""
+    out = []
+    for origin in origins:
+        parsed = urlsplit(normalize_origin(origin))
+        scheme = "wss" if parsed.scheme == "https" else "ws"
+        out.append("%s://%s" % (scheme, parsed.netloc))
+    return sorted(set(out))
 
 # Test-only escape hatch: e2e.js needs to dial a fixture on loopback, which is
 # precisely what the address rule exists to forbid. Off unless asked for, and
 # it announces itself, because a quiet way to disable this would be worse than
 # not having the rule at all.
-ALLOW_PRIVATE = os.environ.get("GW_RELAY_ALLOW_PRIVATE") == "1"
+ALLOW_PRIVATE = os.environ.get("GWASM_RELAY_ALLOW_PRIVATE") == "1"
 
 
 def is_public_ip(ip):
@@ -1159,12 +1201,12 @@ PROXY_ROUTES = {
     "store": "store.guildwars.com",
     "www": "www.guildwars.com",
 }
-for _pair in filter(None, os.environ.get("GW_PROXY_ROUTES", "").split(",")):
+for _pair in filter(None, os.environ.get("GWASM_PROXY_ROUTES", "").split(",")):
     _r, _, _h = _pair.partition("=")
     if _r and _h:
         PROXY_ROUTES[_r.strip()] = _h.strip()
 
-PROXY_TEMPLATE = os.environ.get("GW_PROXY_TEMPLATE")  # tests point this at a fixture
+PROXY_TEMPLATE = os.environ.get("GWASM_PROXY_TEMPLATE")  # tests point this at a fixture
 ROUTE_RE = re.compile(r"^/([a-z0-9][a-z0-9-]{0,30})(/.*)$", re.I)
 RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 
@@ -1194,12 +1236,13 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Accept-Ranges", "bytes")
         # No COOP/COEP: the module is single-threaded and uses no
         # SharedArrayBuffer, so cross-origin isolation is unnecessary.
+        connect = " ".join(["'self'"] + websocket_origins(self.origins))
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Security-Policy",
-                         "default-src 'self'; connect-src 'self' "
-                         "ws://127.0.0.1:* ws://localhost:*; "
+                         "default-src 'self'; connect-src %s; " % connect +
                          "img-src 'self' data:; font-src 'self'; "
-                         "script-src 'self'; style-src 'self'; object-src 'none'; "
+                         "script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; "
+                         "object-src 'none'; "
                          "base-uri 'none'; frame-ancestors 'none'")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
@@ -1348,6 +1391,12 @@ class Handler(SimpleHTTPRequestHandler):
             return False
         route, rest = m.group(1), m.group(2)
 
+        origin = self.headers.get("Origin")
+        if origin is not None and origin not in self.origins:
+            log("DENY proxy origin", origin)
+            self.send_error(HTTPStatus.FORBIDDEN, "origin not allowed")
+            return True
+
         if PROXY_TEMPLATE:
             url = PROXY_TEMPLATE.format(route=route) + rest
         else:
@@ -1479,7 +1528,7 @@ class Handler(SimpleHTTPRequestHandler):
         super().do_GET()
 
 
-class GWServer(ThreadingHTTPServer):
+class GwasmServer(ThreadingHTTPServer):
     daemon_threads = True
     block_on_close = False
 
@@ -1489,8 +1538,12 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("-d", "--dir", default=None, type=Path,
                     help="where the client files live (default: ./dist)")
+    ap.add_argument("--bind", default="127.0.0.1",
+                    help="address to listen on (default: 127.0.0.1)")
     ap.add_argument("-p", "--port", type=int, default=8080)
     ap.add_argument("-c", "--cache", default=None, type=Path)
+    ap.add_argument("--origin", action="append", metavar="ORIGIN",
+                    help="allowed http(s)://host:port origin; repeat for multiple origins")
     ap.add_argument("-j", "--jobs", type=int, default=PREFETCH_JOBS,
                     help="concurrent chunk fetches, for every download this "
                          "makes (default %d, maximum %d). The limit protects "
@@ -1512,6 +1565,12 @@ def main():
                          "instead of streaming it on demand. Resumable, and "
                          "afterwards the game needs no network for game data")
     args = ap.parse_args()
+
+    try:
+        explicit_origins = sorted(set(normalize_origin(origin)
+                                       for origin in (args.origin or [])))
+    except ValueError as e:
+        ap.error("invalid --origin: %s" % e)
 
     try:
         validate_jobs(args.jobs)
@@ -1600,18 +1659,28 @@ def main():
 
     # Threaded: the module issues concurrent reads and a serial server
     # deadlocks -- and each relayed socket holds a thread for its lifetime.
-    httpd = GWServer(("127.0.0.1", args.port),
+    httpd = GwasmServer((args.bind, args.port),
                      partial(Handler, directory=str(dest)))
     actual_port = httpd.server_address[1]
     Handler.proxy_http = Http()
-    Handler.origins = {"http://127.0.0.1:%d" % actual_port,
-                       "http://localhost:%d" % actual_port}
-    url = "http://127.0.0.1:%d/" % actual_port
+    Handler.origins = set(explicit_origins) or {
+        normalize_origin("http://127.0.0.1:%d" % actual_port),
+        normalize_origin("http://localhost:%d" % actual_port),
+    }
+    if explicit_origins:
+        url = explicit_origins[0] + "/"
+    else:
+        browser_host = "127.0.0.1" if args.bind in ("0.0.0.0", "::") else args.bind
+        if ":" in browser_host and not browser_host.startswith("["):
+            browser_host = "[%s]" % browser_host
+        url = "http://%s:%d/" % (browser_host, actual_port)
     log("serving %s at %s" % (dest, url))
+    log("bind: %s:%d; relay origins: %s"
+        % (args.bind, actual_port, ", ".join(sorted(Handler.origins))))
     log("relay: same origin, domains %s, ports %s"
         % (", ".join(ALLOWED_DOMAINS), ", ".join(str(p) for p in sorted(ALLOWED_PORTS))))
     if ALLOW_PRIVATE:
-        log("relay: WARNING -- GW_RELAY_ALLOW_PRIVATE=1, private addresses may "
+        log("relay: WARNING -- GWASM_RELAY_ALLOW_PRIVATE=1, private addresses may "
             "be dialled. This is for tests; do not browse with it set.")
 
     # Browser first, then the download: the point of the loading screen is that
@@ -1630,6 +1699,13 @@ def main():
         threading.Timer(0.3, launch).start()
     threading.Thread(target=work, daemon=True).start()
     threading.Thread(target=record, daemon=True).start()
+
+    def stop_on_signal(signum, _frame):
+        log("received signal %d -- stopping" % signum)
+        stop.set()
+        threading.Thread(target=httpd.shutdown, daemon=True).start()
+
+    signal.signal(signal.SIGTERM, stop_on_signal)
 
     try:
         httpd.serve_forever()

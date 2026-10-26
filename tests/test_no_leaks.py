@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assert the repo contains nothing it should not publish.
+"""Assert the repo contains nothing it should not publish or misname.
 
 Nothing ArenaNet-derived belongs in this repo: not binaries, not
 credentials, and not manifest metadata. The scripts reproduce all of it from a
@@ -47,11 +47,33 @@ SECRETS = [
     (r"\b[0-9a-f]{64}\b", "a sha256 -- chunk hashes are ArenaNet metadata"),
 ]
 
+# Project identifiers replaced by the gwasm name. Keep this list narrow: Gw.*
+# game artifacts and gwpatch/gwkey tooling are protocol names, not branding.
+LEGACY_BRANDING = [
+    (r"gw[-_]in[-_]browser", "legacy project slug"),
+    (r"(?<![A-Za-z0-9_])gw[.]py(?![A-Za-z0-9_])", "legacy entry point"),
+    (r"\bGW_(?:ORIGIN|RELAY|PROXY)", "legacy environment namespace"),
+    (r"\bgw-(?:data|smoke)\b", "legacy container resource"),
+    (r"window[.]gw(?!asm)[A-Z]", "legacy browser global"),
+    (r"['\"]gw[.](?:log|patchMode|touchMode|pointerLock|credentials|chunks)",
+     "legacy browser storage namespace"),
+    (r"gwdevhub", "legacy repository owner"),
+]
+
+BRAND_MARKERS = {
+    "README.md": "# gwasm\n",
+    "harness/index.html": "<title>gwasm</title>",
+    "package.json": '"name": "gwasm-tests"',
+    "Dockerfile": 'ENTRYPOINT ["python", "/app/gwasm.py"]',
+    "compose.yaml": "  gwasm:\n",
+    ".github/workflows/release.yml": 'name="gwasm-${{ steps.v.outputs.tag }}"',
+}
+
 # Known-good strings that match the patterns above but are not secrets.
 ALLOWED = {
     # RFC 6455 section 1.3: the fixed GUID every WebSocket handshake concatenates.
     "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
-    # ArenaNet's client access key, hardcoded in gw.py so the file runs with
+    # ArenaNet's client access key, hardcoded in gwasm.py so the file runs with
     # nothing to configure -- it ships in the public app bundle and identifies
     # the client, not a user. See CLAUDE.md, "What is committed that arguably
     # should not be". This is NOT a general licence to commit credentials: the
@@ -75,6 +97,8 @@ def tracked():
 def main():
     files = tracked()
     check("git ls-files returned something", bool(files), "not a git repo?")
+    check("gwasm entry point exists", (REPO / "gwasm.py").is_file())
+    check("legacy entry point is gone", not (REPO / "gw.py").exists())
 
     for pattern, why in FORBIDDEN:
         hits = [f for f in files if re.search(pattern, f, re.I)]
@@ -98,11 +122,33 @@ def main():
                 break
         check("no %s in tracked content" % why, not hits, hits)
 
+    # Include renamed files before they are staged so this guard is useful
+    # while developing as well as after a commit reaches CI.
+    brand_files = list(dict.fromkeys(files + ["gwasm.py", "tests/test_gwasm.py"]))
+    for pattern, why in LEGACY_BRANDING:
+        hits = []
+        for f in brand_files:
+            if f == "tests/test_no_leaks.py":
+                continue
+            p = REPO / f
+            if not p.is_file():
+                continue
+            try:
+                text = p.read_text(errors="ignore")
+            except OSError:
+                continue
+            if re.search(pattern, text, re.I):
+                hits.append(f)
+        check("no %s (/%s/)" % (why, pattern), not hits, hits)
+
+    for filename, marker in BRAND_MARKERS.items():
+        text = (REPO / filename).read_text(errors="ignore")
+        check("%s carries gwasm branding" % filename, marker in text)
+
     failed = results.count(False)
     print("\n%d failure(s)" % failed)
     if failed:
-        print("\nSomething publishable-by-accident is tracked. Remove it with\n"
-              "  git rm --cached <path>\nand add it to .gitignore.")
+        print("\nRepository policy checks failed; review the failures above.")
     return 1 if failed else 0
 
 

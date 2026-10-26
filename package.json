@@ -1,7 +1,7 @@
 {
-  "name": "gw-in-browser-tests",
+  "name": "gwasm-tests",
   "private": true,
-  "description": "Pinned browser test tooling for gw_in_browser",
+  "description": "Pinned browser test tooling for gwasm",
   "devDependencies": {
     "playwright": "1.55.1"
   }

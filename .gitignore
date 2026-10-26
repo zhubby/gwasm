@@ -1,8 +1,9 @@
 # Credentials -------------------------------------------------------------
-# A key file extracted by gwkey.py. gw.py has a working key built in, so this
+# A key file extracted by gwkey.py. gwasm.py has a working key built in, so this
 # only appears if you extracted your own; either way it stays out of git.
 access.key
 *.key
+.env
 
 # Game artifacts ----------------------------------------------------------
 # ArenaNet's copyrighted binaries. Never commit these. Everything here is

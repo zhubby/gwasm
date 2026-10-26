@@ -46,11 +46,11 @@ function makeCtx() {
     },
     // The harness targets a browser and assigns its console helpers onto
     // window at module scope, so this has to exist or Module is never built.
-    // gwLoading is stubbed to never resolve: boot() waits on it, and this test
+    // gwasmLoading is stubbed to never resolve: boot() waits on it, and this test
     // is only interested in the Module built before that point.
     window: {
       addEventListener() {}, removeEventListener() {},
-      gwLoading: { set() {}, fail() {}, done() {},
+      gwasmLoading: { set() {}, fail() {}, done() {},
                    waitForClient: () => new Promise(() => {}) },
     },
     navigator: { userAgent: 'node-test', maxTouchPoints: 0, storage: undefined },

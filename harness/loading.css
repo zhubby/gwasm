@@ -57,7 +57,7 @@
                   text-align:center; text-shadow:0 1px 6px #000c; }
 #loading-label.error { color:#ff8f6b; }
 
-/* gw.py's background prefetch. Its own line: it runs concurrently with the
+/* gwasm.py's background prefetch. Its own line: it runs concurrently with the
    game's startup, so it must not overwrite what the module is reporting. */
 #loading-sub { min-height:1.2em; font-size:12.5px; color:#e8dcc073;
                text-align:center; text-shadow:0 1px 6px #000c; }
