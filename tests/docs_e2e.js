@@ -16,6 +16,8 @@ const check = (name, condition, detail = '') => {
 
 function findChrome() {
   if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
+  const installed = chromium.executablePath();
+  if (fs.existsSync(installed)) return installed;
   const roots = [
     path.join(os.homedir(), '.cache', 'ms-playwright'),
     path.join(os.homedir(), 'Library', 'Caches', 'ms-playwright'),
@@ -25,6 +27,7 @@ function findChrome() {
     for (const directory of fs.readdirSync(root)) {
       for (const suffix of [
         'chrome-linux64/chrome', 'chrome-headless-shell-linux64/chrome-headless-shell',
+        'chrome-linux/chrome', 'chrome-headless-shell-linux/headless_shell',
         'chrome-mac/Chromium.app/Contents/MacOS/Chromium',
         'chrome-headless-shell-mac-arm64/chrome-headless-shell',
       ]) {
@@ -176,11 +179,11 @@ async function visibleSelect(page, element) {
     const lifecycle = await lifecycleContext.newPage();
     const lifecycleRequests = [];
     lifecycle.on('request', (request) => lifecycleRequests.push(request.url()));
-    await lifecycle.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await lifecycle.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
     await lifecycle.locator('#docs-link:not([hidden])').waitFor();
     await lifecycle.locator('#docs-link').click();
     await lifecycle.waitForURL('**/docs/');
-    await lifecycle.goBack({ waitUntil: 'networkidle' });
+    await lifecycle.goBack({ waitUntil: 'domcontentloaded' });
     check('game/docs history restores with a fresh heartbeat ID',
           !!await waitFor(() => new Set(lifecycleRequests
             .filter((url) => url.includes('/ping?id='))

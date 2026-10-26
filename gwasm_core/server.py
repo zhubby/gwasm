@@ -4,7 +4,6 @@ import base64
 import hashlib
 import ipaddress
 import json
-import mimetypes
 import os
 import re
 import select
@@ -36,10 +35,6 @@ WS_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 MAX_WS_FRAME = 16 * 1024 * 1024
 ROUTE_RE = re.compile(r"^/([a-z0-9][a-z0-9-]{0,30})(/.*)$", re.I)
 RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
-
-mimetypes.add_type("application/wasm", ".wasm")
-mimetypes.add_type("application/wasm", ".pagefind")
-
 
 @dataclass
 class RelayPolicy:
@@ -368,6 +363,11 @@ class Handler(SimpleHTTPRequestHandler):
     def log_request(self, code="-", size="-"):
         if self.context.verbose or (isinstance(code, int) and code >= 400):
             super().log_request(code, size)
+
+    def guess_type(self, path):
+        if path.endswith((".wasm", ".pagefind")):
+            return "application/wasm"
+        return super().guess_type(path)
 
     def send_response(self, code, message=None):
         self._response_code = int(code)
