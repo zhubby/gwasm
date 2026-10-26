@@ -34,7 +34,7 @@ There is no docs CLI argument. The service only discovers a `docs-dist/` with `i
 | `GWASM_RELAY_ALLOW_PRIVATE` | unset | `1` permits non-public addresses; tests only |
 | `GWASM_PROXY_ROUTES` | unset | `route=host,...` merges/overrides Web routes |
 | `GWASM_PROXY_TEMPLATE` | unset | upstream template for local fixtures |
-| `GWASM_ORIGIN` | none | Compose interpolation into `--origin`; Python does not read it directly |
+| `GWASM_ORIGIN` | `http://localhost:8080` | Compose interpolation into an additional `--origin`; Python does not read it directly |
 
 <Aside type="danger" title="Environment changes trust boundaries">
 Domains, ports, private-address behavior, and proxy routes can expand capability. Fix, review, and record production values; never accept them from untrusted users.

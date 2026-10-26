@@ -69,6 +69,19 @@ class ToolArgumentTests(unittest.TestCase):
                      "--build"):
             self.assertIn(flag, result.stdout)
 
+    def test_compose_allows_loopback_and_optional_lan_origins(self):
+        compose = (ROOT / "compose.yaml").read_text()
+        origins = """      - --origin
+      - http://localhost:8080
+      - --origin
+      - http://127.0.0.1:8080
+      - --origin
+      - "${GWASM_ORIGIN:-http://localhost:8080}"
+"""
+        self.assertIn(origins, compose)
+        self.assertEqual(compose.count("      - --origin\n"), 3)
+        self.assertNotIn("${GWASM_ORIGIN:?", compose)
+
     def test_remote_mode_selects_public_listener_by_default(self):
         class ServerCreated(Exception):
             pass

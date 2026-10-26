@@ -17,7 +17,7 @@ import ArchitectureDiagram from '../../../components/ArchitectureDiagram.astro';
 
 ## 部署前置条件
 
-1. 明确浏览器看到的完整 Origin，包括 scheme、host、port；容器模式用 `GWASM_ORIGIN` 传入。
+1. 本机可直接使用 `localhost:8080` 或 `127.0.0.1:8080`；局域网访问再用 `GWASM_ORIGIN` 传入额外的完整 Origin。
 2. 防火墙只允许预期设备；公网入口必须另有认证网关，但项目仍不支持共享多用户实例。
 3. 允许出站 DNS、HTTPS 与 TCP 6112/80/443 到许可的 ArenaNet/Guild Wars 服务。
 4. 按需模式至少预留 1 GB；完整快照约 4.2 GB，运维上预留 5 GB 及 inode/备份余量。

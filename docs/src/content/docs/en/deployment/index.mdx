@@ -17,7 +17,7 @@ Deployment gives one trusted user's browser same-origin access to the client, sn
 
 ## Prerequisites
 
-1. Determine the exact browser-visible Origin, including scheme, host, and port. Container mode passes it through `GWASM_ORIGIN`.
+1. Local access works at `localhost:8080` or `127.0.0.1:8080`; set `GWASM_ORIGIN` only for an additional complete LAN Origin.
 2. Restrict the firewall to intended devices. A public edge requires separate authentication, but shared multi-user operation remains unsupported.
 3. Permit outbound DNS, HTTPS, and TCP 6112/80/443 to allowed ArenaNet/Guild Wars services.
 4. Keep at least 1 GB for demand mode. A complete snapshot is about 4.2 GB; reserve 5 GB plus backup and inode headroom.

@@ -1,16 +1,17 @@
 ---
 title: Docker Compose
-description: 构建或拉取镜像、配置精确 Origin、验证持久卷与运行镜像边界。
+description: 构建或拉取镜像、配置本地或局域网访问、验证持久卷与运行镜像边界。
 ---
 import { Aside, Steps } from '@astrojs/starlight/components';
 
 官方工作流发布 `linux/amd64` 与 `linux/arm64` 到 GHCR。镜像使用多阶段构建：Node stage 固定安装 lockfile 并生成 `docs-dist/`；Python 3.13 slim runtime 只复制运行代码、静态资产与文档产物，以非 root `gwasm` 用户执行。
 
 <Steps>
-1. 创建 `.env`，填写浏览器实际打开的 Origin：`GWASM_ORIGIN=http://192.168.1.20:8080`。不能带路径或尾斜杠。
-2. 执行 `docker compose up -d`。Compose 把 8080 映射到所有主机接口，因此必须另配主机防火墙。
-3. 查看 `docker compose logs -f gwasm`，等待 `serving`、`relay` 和 snapshot 状态。
-4. 打开 `http://192.168.1.20:8080/`，并确认 `http://192.168.1.20:8080/docs/` 可访问。
+1. 只在本机访问时无需创建 `.env`；Compose 默认允许 `http://localhost:8080` 和 `http://127.0.0.1:8080`。
+2. 需要从局域网访问时，创建 `.env` 并填写浏览器实际打开的额外 Origin，例如 `GWASM_ORIGIN=http://192.168.1.20:8080`。不能带路径或尾斜杠。
+3. 执行 `docker compose up -d`。Compose 把 8080 映射到所有主机接口，因此必须另配主机防火墙。
+4. 查看 `docker compose logs -f gwasm`，等待 `serving`、`relay` 和 snapshot 状态。
+5. 打开所配置的地址，并确认其 `/docs/` 路径可访问。
 </Steps>
 
 ```bash

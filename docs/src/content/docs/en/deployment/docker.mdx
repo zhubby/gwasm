@@ -1,16 +1,17 @@
 ---
 title: Docker Compose
-description: Build or pull the image, configure an exact Origin, and verify persistence and runtime-image boundaries.
+description: Build or pull the image, configure local or LAN access, and verify persistence and runtime-image boundaries.
 ---
 import { Aside, Steps } from '@astrojs/starlight/components';
 
 The release workflow publishes `linux/amd64` and `linux/arm64` to GHCR. The multi-stage image installs the locked documentation toolchain and builds `docs-dist/` in a Node stage. A Python 3.13 slim runtime copies only runtime code, assets, and static docs, then runs as the non-root `gwasm` user.
 
 <Steps>
-1. Create `.env` with the browser-visible Origin: `GWASM_ORIGIN=http://192.168.1.20:8080`. It cannot contain a path or trailing slash.
-2. Run `docker compose up -d`. Compose maps 8080 on every host interface, so configure the host firewall separately.
-3. Follow `docker compose logs -f gwasm` for `serving`, `relay`, and snapshot state.
-4. Open `http://192.168.1.20:8080/` and confirm `http://192.168.1.20:8080/docs/`.
+1. Local-only access needs no `.env`; Compose allows `http://localhost:8080` and `http://127.0.0.1:8080` by default.
+2. For LAN access, create `.env` with the additional browser-visible Origin, such as `GWASM_ORIGIN=http://192.168.1.20:8080`. It cannot contain a path or trailing slash.
+3. Run `docker compose up -d`. Compose maps 8080 on every host interface, so configure the host firewall separately.
+4. Follow `docker compose logs -f gwasm` for `serving`, `relay`, and snapshot state.
+5. Open the configured address and confirm its `/docs/` path.
 </Steps>
 
 ```bash

@@ -17,7 +17,11 @@ services:
       - --dir
       - /data/dist
       - --origin
-      - "${GWASM_ORIGIN:?set GWASM_ORIGIN in .env}"
+      - http://localhost:8080
+      - --origin
+      - http://127.0.0.1:8080
+      - --origin
+      - "${GWASM_ORIGIN:-http://localhost:8080}"
     restart: unless-stopped
     stop_grace_period: 30s
     healthcheck:

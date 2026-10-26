@@ -34,7 +34,7 @@ import { Aside } from '@astrojs/starlight/components';
 | `GWASM_RELAY_ALLOW_PRIVATE` | unset | `1` 允许非公共地址；仅测试 |
 | `GWASM_PROXY_ROUTES` | unset | `route=host,...` 合并/覆盖 Web 路由 |
 | `GWASM_PROXY_TEMPLATE` | unset | 测试用上游模板，例如本地 fixture |
-| `GWASM_ORIGIN` | 无 | Compose 插值后作为 `--origin`；Python 不直接读取 |
+| `GWASM_ORIGIN` | `http://localhost:8080` | Compose 插值后作为额外的 `--origin`；Python 不直接读取 |
 
 <Aside type="danger" title="环境变量会改变信任边界">
 Domains、ports、private-address 与 proxy route 都能扩大 relay/proxy 能力。生产配置应固定、评审并记录；不要接受来自不可信用户的环境值。
