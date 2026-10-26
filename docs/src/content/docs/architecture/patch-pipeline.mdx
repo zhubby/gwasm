@@ -1,0 +1,30 @@
+---
+title: Manifest 与 Chunk 管线
+description: 版本发现、manifest 解析、内容寻址下载、并发去重与原子发布。
+---
+import { Aside } from '@astrojs/starlight/components';
+import ArchitectureDiagram from '../../../components/ArchitectureDiagram.astro';
+
+<ArchitectureDiagram type="update" lang="zh" />
+
+更新器把上游 manifest 视为不可变事实，而不是“下载建议”。每个目标文件被拆成 hash 列表；chunk 只有在解压后长度和 SHA-256 都满足 manifest 才进入缓存。明文与 gzip 传输共享相同内容验证，因此 HTTP 编码不会改变缓存标识。
+
+## 管线阶段
+
+1. 获取 `version.json`，按 `jspi`、`asyncify` 或 `both` 选择文件集合。
+2. 读取 manifest，验证字段、文件大小、chunk size 与 hash 形状。
+3. 对缺失 hash 建立下载任务；`Http` 为每个线程复用 `(scheme, host)` 连接。
+4. 临时网络错误指数退避；401/403/404 不重试，因为它们不是瞬时失败。
+5. 校验成功后以 hash 写入 cache；输出文件和 `snapshot-chunks.json` 使用临时文件替换，避免半写状态。
+
+## 并发与伦理边界
+
+`PREFETCH_JOBS` 默认且最高为 8。单个 256 KB 请求实测受约 650 ms RTT 限制，提高并发确实能提升吞吐，但 access key 由所有安装共享。上限同时是远端服务保护和可靠性约束，不是待优化的常量。
+
+<Aside type="note" title="更新不会组装 4.2 GB 文件">
+`snapshot-chunks.json` 保存总大小、chunk size、缓存路径和 hash 列表。HTTP Range 在请求时拼接内容；只有独立工具显式指定输出时才组装完整快照。
+</Aside>
+
+## 更新兼容性
+
+新 manifest 可以重用缓存中 hash 相同的旧块。索引替换发生在所有元数据验证完成后；崩溃不会把旧索引指向不完整的新集合。更新脚本的单元测试覆盖 gzip、断点续传、hash 错误、磁盘余量和并发同块去重。

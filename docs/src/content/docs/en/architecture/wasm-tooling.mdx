@@ -1,0 +1,29 @@
+---
+title: Wasm analysis toolchain
+description: Binary decoding and reference location through symbol recovery, table expansion, and static detours.
+---
+import { Aside } from '@astrojs/starlight/components';
+
+`tools/` analyzes Wasm module bytes directly. Runtime linear memory does not contain the code section, so a module cannot scan its own instructions. Derived binaries go to ignored `build/`; client Wasm is never committed.
+
+## Tools and order
+
+```bash
+python3 tools/wasmscan.py dist/Gw.jspi.wasm '!s_context'
+python3 tools/wasmpatch.py dist/Gw.jspi.wasm build/patched.wasm
+python3 tools/wasmdetour.py build/patched.wasm build/shared.wasm --all
+python3 tools/gensyms.py dist/Gw.jspi.wasm build/
+```
+
+1. `wasmscan.py` decodes all instructions, imports, functions, data, and tables, then locates functions through strings, assertions, and address references.
+2. `wasmpatch.py` appends all roughly 17.6k functions to the indirect table and leaves growth capacity. Stock includes only address-taken functions and has `min == max`.
+3. `wasmdetour.py` moves an original body to `gwca_orig_<f>` and replaces it with a hook-table dispatcher, intercepting direct calls as well as table calls.
+4. `gensyms.py` recovers a name section from imports, exports, and roughly 850 source paths, plus a string-xref CSV and Ghidra importer.
+
+<Aside type="caution" title="LEB128 must be decoded">
+LLVM relocations often use fixed-width, zero-padded, non-canonical encodings. The same `i32.const` need not have its shortest byte sequence. Byte-searching constants produces plausible false zeroes; the scanner must decode instructions.
+</Aside>
+
+## Verification boundary
+
+The decoder reports uncovered functions rather than silently skipping them. Patchers append structure instead of adding imports that would renumber every defined function. These tools can prove layout and transformation properties, not hook business semantics, account protocols, or real rendering.

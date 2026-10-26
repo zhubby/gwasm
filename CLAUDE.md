@@ -1,7 +1,7 @@
 # gwasm development guide
 
 Context for anyone — human or agent — working on this repo. `README.md` is the
-user-facing guide; `docs/internals.md` is the technical write-up. This file
+compact entry point; `docs/src/content/docs/` is the bilingual technical portal. This file
 covers how the project is laid out, the conventions it follows, and the
 constraints that are not obvious from reading the code.
 
@@ -51,7 +51,7 @@ real hardware are the single most useful contribution right now.
 Applies to `gwasm.py`, `gwasm_core/` and the JS in `harness/`.
 
 - **Single-line comments.** No block comments. A point that needs a paragraph
-  belongs in `docs/internals.md`, not above the code.
+  belongs in the Starlight architecture documentation, not above the code.
 - **Comment the surprise, not the mechanism.** Why something is done the odd
   way, not what the next line does. Most lines need no comment.
 - **Inline one- and two-line functions.** A name is earned by being called
@@ -216,6 +216,11 @@ service rather than about one user's patience:
 A WebSocket-to-TCP bridge is reachable by every page from an accepted origin,
 not just ours. The default bind is `127.0.0.1`; container mode may use
 `--bind 0.0.0.0` only with an explicit `--origin` allowlist and a trusted LAN.
+The explicit `--remote` mode instead binds `0.0.0.0` and dynamically accepts an
+Origin only when its host and effective port match the request `Host`. This
+allows arbitrary remote hostnames without allowing an unrelated page to call
+the relay directly, but it adds no authentication and remains unsuitable as a
+public multi-user service.
 It remains bounded by public-unicast-only destinations, an allowlisted port
 set, an `Origin` check, and `/dns` resolving only under allowlisted domains.
 

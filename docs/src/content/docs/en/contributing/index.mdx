@@ -1,0 +1,34 @@
+---
+title: Repository layout
+description: Contributor entry points, module responsibilities, coding constraints, and sources of truth.
+---
+import { Aside } from '@astrojs/starlight/components';
+
+## Directory responsibilities
+
+| Path | Responsibility |
+| --- | --- |
+| `gwasm.py` | CLI, installation checks, process lifecycle, browser launch |
+| `gwasm_core/http.py` | standard-library HTTP client, retries, connection reuse |
+| `gwasm_core/patch.py` | manifest, chunks, hashes, virtual snapshot, prefetch |
+| `gwasm_core/runtime.py` | publication, image index, progress, watchdog |
+| `gwasm_core/server.py` | static/docs HTTP, Range, DNS, proxy, relay |
+| `harness/` | ordered classic scripts: foundation, cache, Module, input, boot |
+| `docs/src/` | bilingual Starlight content, components, and styles |
+| `docs/host-contract.json` | machine-readable browser-host source of truth |
+| `tools/` | Wasm scanning, patching, detours, symbols |
+| `tests/` | Python, host contract, Playwright, release policy |
+
+## Runtime principles
+
+The Python runtime remains standard-library-only. That keeps releases double-clickable and avoids PEP 668 problems with system Python. Node belongs only to docs and browser tests. Do not add `requests`, a Web framework, or a template engine to `gwasm_core` for convenience.
+
+Comments explain surprising reasons rather than restating code. Shared state belongs in `ServerContext`. Async host stubs preserve Promise shapes. Relay changes must consider domain, address, port, and Origin boundaries together.
+
+## Evidence hierarchy
+
+Code plus offline tests establish verified facts. Real CDN, account, and GPU behavior becomes verified only through reproducible observation. Documentation must not turn plans, inference, or reaching an intermediate log into final capability. After a client update, rescan `Module.*` calls and manifests instead of carrying assumptions forward.
+
+<Aside type="caution" title="Never commit game artifacts">
+`.apk`, `.wasm`, `Gw.js`, snapshots, manifests, caches, credentials, and derived analysis output stay ignored. `tests/test_no_leaks.py` enforces the release boundary.
+</Aside>

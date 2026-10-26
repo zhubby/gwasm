@@ -1,0 +1,24 @@
+---
+title: Artifacts and legal notices
+description: Release and container boundaries, third-party asset ownership, licensing, and responsible-use constraints.
+---
+
+## Distribution artifacts
+
+The release zip contains the Python runtime, `gwasm_core/`, browser harness, images, font, concise README, GPL-3.0 LICENSE, and built `docs-dist/`. The GHCR runtime image carries equivalent runtime material but no Node/npm, Astro source dependencies, tests, or tools.
+
+The distribution never contains an APK, Guild Wars client Wasm, official JS glue, the 4.2 GB snapshot, manifests, chunk cache, user data, password, token, or extracted key. Users obtain or derive those locally from licensed sources at runtime. `docs-dist/pagefind/` contains only Pagefind's documentation-search Wasm, not a game binary.
+
+## Legal and trademarks
+
+This is an independent fan interoperability project, **in no way affiliated with or endorsed by ArenaNet or NCSoft**.
+
+Guild Wars and all associated game content are © 2005–2026 ArenaNet, Inc. All rights reserved. NCsoft, the interlocking NC logo, ArenaNet, Arena.net, Guild Wars, and associated logos and designs are trademarks or registered trademarks of NCsoft Corporation. Other marks belong to their owners.
+
+Loading-screen photography is by [Snapshot Henchman](https://bloogum.net/guildwars/). The Guild Wars logo, screenshots, and favicon in the repository support the offline loading screen. `fonts/Fremont.woff` is © SoftMaker Software GmbH, and Fremont is its trademark; it is not an ArenaNet asset.
+
+## Software license and conduct
+
+Project code is GPL-3.0, matching `gwlauncher` and `gMod`. Copyleft is deliberate: recovered interoperability knowledge should remain open in derivatives. The license grants no rights to game content, trademarks, fonts, or accounts.
+
+Every installation shares a client access key and reaches the real production CDN. The eight-worker cap, honest User-Agent, and exponential backoff protect that service. Do not increase load, automate account traffic, or package this research environment as a public game service.

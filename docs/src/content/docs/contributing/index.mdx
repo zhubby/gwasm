@@ -1,0 +1,34 @@
+---
+title: 仓库结构
+description: 贡献者入口、模块职责、代码约束和事实来源。
+---
+import { Aside } from '@astrojs/starlight/components';
+
+## 目录职责
+
+| 路径 | 责任 |
+| --- | --- |
+| `gwasm.py` | CLI、安装检查、进程生命周期和浏览器启动 |
+| `gwasm_core/http.py` | 标准库 HTTP client、重试与连接复用 |
+| `gwasm_core/patch.py` | manifest、chunk、hash、虚拟快照与预取 |
+| `gwasm_core/runtime.py` | 发布、图片索引、进度与 watchdog |
+| `gwasm_core/server.py` | 静态/文档 HTTP、Range、DNS、proxy、relay |
+| `harness/` | 有序 classic scripts：基础、cache、Module、input、boot |
+| `docs/src/` | Starlight 配置之外的双语内容、组件与样式 |
+| `docs/host-contract.json` | 浏览器宿主接口的机器可读事实来源 |
+| `tools/` | Wasm 扫描、patch、detour、符号恢复 |
+| `tests/` | Python、host contract、Playwright 与 release policy |
+
+## 运行时原则
+
+Python 运行时保持标准库零依赖，这是 release 可双击、Linux 系统 Python 不受 PEP 668 影响的产品约束。Node 只用于文档和浏览器测试。不要为了方便在 `gwasm_core` 引入 `requests`、Web 框架或模板引擎。
+
+代码注释解释反直觉原因，不复述语句。共享状态放进 `ServerContext`；异步宿主 stub 必须遵守 Promise 形状；修改 relay policy 时同时检查域名、地址、端口和 Origin 四条边界。
+
+## 事实优先级
+
+代码与离线测试是已验证事实；真实 CDN、账号和 GPU 行为只有可复现实测才能升级为“已验证”。文档不能把计划、推断或日志到达某阶段写成最终能力。客户端版本变化后，优先重新扫描 `Module.*` 调用和 manifest，而不是延续旧假设。
+
+<Aside type="caution" title="不要提交游戏制品">
+`.apk`、`.wasm`、`Gw.js`、snapshot、manifest、cache、凭据和派生分析输出必须保持忽略。`tests/test_no_leaks.py` 是发行边界的自动检查。
+</Aside>

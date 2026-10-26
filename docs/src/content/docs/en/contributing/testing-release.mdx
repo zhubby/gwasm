@@ -1,0 +1,35 @@
+---
+title: Tests, CI, and releases
+description: Offline test matrix, browser validation, documentation checks, and release/GHCR delivery.
+---
+
+## Local tests
+
+```bash
+python3 -m unittest discover -s tests -p 'test_*.py'
+python3 tests/test_no_leaks.py
+node tests/test_harness.js
+npm run docs:check
+npm run docs:build
+node tests/e2e.js
+```
+
+Python covers HTTP, patch/cache, runtime, server-instance isolation, Range, relay frames, and tool arguments. The host suite reads `docs/host-contract.json` and checks Module adoption, methods, callbacks, and Promises. E2E drives the real harness with a local synthetic snapshot and loopback TCP fixture, never production services.
+
+## CI matrix
+
+- Python 3.8 and 3.13: compile, unittest, and leak policy.
+- Node 22.23.4: host contract, Astro type check, locale parity, static build, and internal links.
+- Playwright Chromium: browser host plus desktop/mobile documentation behavior.
+- Docker: runtime build, HTTP smoke, persistent volume, docs, non-root user, and forbidden-artifact absence.
+- Release: reuse full CI, build docs, package zip, and publish an AMD64/ARM64 GHCR manifest.
+
+## Artifact gate
+
+The zip must contain `gwasm.py`, all `gwasm_core/` and harness files, images/fonts, README/LICENSE, and complete `docs-dist/`. Extraction, `--help`, and `/docs/` smoke must pass. Runtime containers contain no Node/npm, source documentation dependencies, game binaries, cache, or credentials.
+
+The release workflow builds from the tag checkout and never reuses a developer's `docs-dist/`. Static docs and Python code are one versioned unit and roll back together.
+
+## What tests cannot prove
+
+Fixtures cannot prove real account authentication, long-term production CDN availability, or real GPU-driver compatibility. Release notes should separate offline-suite results from a human hardware matrix. Without observation, status remains unverified.

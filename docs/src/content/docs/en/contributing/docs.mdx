@@ -1,0 +1,27 @@
+---
+title: Documentation
+description: Maintain bilingual pages, architecture diagrams, links, search, and accessibility in Astro Starlight.
+---
+import { Aside } from '@astrojs/starlight/components';
+
+Starlight content lives in `docs/src/content/docs/`. Chinese uses the root locale; English under `en/` has the identical relative tree. Add, rename, or remove both language pages in one change and update both sidebars in `astro.config.mjs`.
+
+## Writing constraints
+
+- Chinese introduces important terms with an English name once, then uses natural Chinese.
+- English is rewritten as native technical prose, not sentence-by-sentence translation. Facts, limitations, table fields, and hierarchy remain equivalent.
+- Separate verified, unverified, and unsupported claims. Plans and hypotheses do not use completion language.
+- Every page needs title and description. Content headings begin at `##`, and internal links are relative.
+- `docs/host-contract.json` is the only contract source; `HostContract.astro` renders it instead of copying JSON lists.
+
+## Architecture diagrams
+
+`ArchitectureDiagram.astro` renders seven types as semantic HTML/CSS with captions, text nodes, and reading instructions. There is no Mermaid or client JavaScript. Every label exists in both languages, and prose explains arrows, failure paths, and boundaries beyond the summary graphic.
+
+## Verification
+
+`npm run docs:parity` checks page trees, frontmatter, and architecture-diagram types/order. `docs:check` runs Astro type checking. `docs:build` generates Pagefind and verifies internal assets plus the `/docs` base. Browser validation covers desktop/mobile, locales, themes, search, keyboard focus, overflow, and console/CSP errors.
+
+<Aside type="note" title="Static output still participates in lifecycle">
+`docs/public/docs-heartbeat.js` reuses `/ping` and `pagehide`. Keeping it external makes docs CSP auditable. Do not add third-party scripts or analytics to MDX.
+</Aside>

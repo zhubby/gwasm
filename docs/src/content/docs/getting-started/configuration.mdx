@@ -1,0 +1,40 @@
+---
+title: 配置与运行模式
+description: 选择 JSPI、Asyncify、按需、预载、离线与网络暴露模式。
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## 客户端构建
+
+| 模式 | 选择方式 | 适用范围 |
+| --- | --- | --- |
+| JSPI | 默认 `--build jspi` | 非 iOS 且浏览器支持 `WebAssembly.Suspending`；客户端较小 |
+| Asyncify | `--build asyncify` | Safari、iOS 或无 JSPI 浏览器；客户端约 27.8 MB |
+| 两者 | `--build both` | 需要同一服务覆盖不同浏览器；宿主按能力选择 |
+
+两种 glue 都会请求名为 `Gw.wasm` 的文件。宿主的 `locateFile()` 必须把 JSPI build 映射到 `Gw.jspi.wasm`，否则同目录存在两种 build 时会静默错配。
+
+## 数据模式
+
+- 默认按需：只下载启动和当前场景触达的 chunk，并在后台预热历史启动工作集。
+- `--image`：启动浏览器前下载全部快照；可中断恢复，需要约 5 GB 可用空间。
+- `--no-prefetch`：保留按需读取，但不预热 `boot-chunks.json`。
+- `--offline`：严格禁止网络抓取；缺失 chunk 返回 `503`，而不是暗中联网。
+- `--no-update`：跳过版本检查，但并不等价于完整离线；缺失快照块仍可从 CDN 获取。
+
+## 绑定与 Origin
+
+默认只监听 `127.0.0.1:8080`。`--bind 0.0.0.0` 会扩大可达范围；此时应为每个允许的浏览器 origin 重复传递完整 `--origin http://host:port`。Origin 不接受路径、通配符、凭据或缺失端口。`--remote` 会默认绑定所有接口，并按每次请求的 `Host` 接受同源 Origin，适合地址变化的受信任 LAN，但不增加任何认证。
+
+`--remote` 提供显式的任意远端模式：默认监听 `0.0.0.0`，不要求预先枚举 IP 或域名，但每次 WebSocket/代理请求的浏览器 Origin 仍必须与该请求的 `Host` 在主机和有效端口上匹配。显式 `--bind` 可覆盖监听地址，`--origin` 仍可追加固定 Origin。
+
+```bash
+python3 gwasm.py --remote --no-browser
+```
+
+<Aside type="danger" title="远端可达不等于公网服务">
+`--remote` 没有用户认证、会话隔离、速率限制或 TLS 终止。任何能连接该端口的人都可以读取客户端与缓存内容并调用受限 relay/proxy。反向代理只能提供 TLS 与外围访问控制，不能改变 relay 的单租户假设。
+</Aside>
+
+环境变量只控制 relay 与 Web API 映射；完整表格见 [CLI 与环境变量](../../reference/cli-env/)。

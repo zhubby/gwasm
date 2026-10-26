@@ -1,0 +1,39 @@
+---
+title: Operations, security, and readiness
+description: Logs, health signals, offline operation, reverse proxies, and deployment hardening.
+---
+import { Aside } from '@astrojs/starlight/components';
+
+## Logs and readiness
+
+Startup should report the served directory/URL, bind plus relay Origins, allowed domains/ports, and docs availability. `-v` logs every HTTP request and can produce thousands of lines; use it only for diagnosis.
+
+| Signal | Healthy meaning | Failure meaning |
+| --- | --- | --- |
+| `GET /` is 200 | harness published | runtime directory/permission issue |
+| `/progress.json` has `done: true` | client and index ready | `error` explains update failure |
+| `GET /docs/` is 200 | current artifact carries docs | unbuilt source or damaged artifact |
+| Range returns 206 | static/snapshot ranges work | 416 identifies request or index issue |
+| relay `open` plus byte counts | TCP and traffic exist | DENY/connect FAILED points to policy/egress |
+
+The Compose healthcheck reads one byte from `/`, making it liveness rather than full readiness. Release automation should additionally check `/docs/`, `/progress.json`, and Range behavior.
+
+## Offline mode
+
+`--offline --no-update` works only when the client, snapshot index, and every needed chunk already exist. The reliable process is one connected `--image` run, stop and back up cache/dist, then start in the isolated environment. A missing chunk returning `503` is intentional.
+
+## Hardening
+
+- Keep the non-root user and read-only application tree; write only cache/dist.
+- Restrict ingress by firewall and egress to required DNS/HTTPS/TCP; never allow cloud metadata addresses.
+- Leave `GWASM_RELAY_ALLOW_PRIVATE=1` off and minimize domains, ports, and proxy routes.
+- Configure request-body limits, idle timeout, WebSocket Upgrade, and Range at the TLS proxy; never cache `/ping`, `/progress.json`, or proxy responses.
+- Never log request bodies, Cookie, Authorization, or future account credentials.
+
+<Aside type="danger" title="Public exposure remains unsupported">
+Even with Basic Auth at the edge, users share one process, cache, relay policy, and upstream access key. There are no tenant quotas, audit boundaries, or credential isolation.
+</Aside>
+
+## Docs and game CSP
+
+The game keeps a strict CSP without inline scripts/styles and permits configured WebSocket Origins. `/docs` has a separate policy allowing only same-origin content, Starlight's required inline initialization/styles, and same-origin Pagefind Wasm. Do not merge them into one wider policy.

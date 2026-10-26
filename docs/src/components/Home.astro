@@ -1,0 +1,71 @@
+---
+import bg from '../../../images/bg0.webp';
+import logo from '../../../images/logo.webp';
+
+const { lang = 'zh' } = Astro.props;
+const en = lang === 'en';
+const base = en ? '/docs/en' : '/docs';
+const copy = en ? {
+  kicker: 'Browser interoperability research',
+  title: 'gwasm',
+  lede: 'A standard-library Python runtime and browser host for studying how the Guild Wars WebAssembly client boots, streams its 4.2 GB snapshot, and reaches its original services.',
+  start: 'Start locally', architecture: 'Read the architecture',
+  states: [
+    ['Verified', 'Client startup and network path', 'Offline fixtures cover patching, Range delivery, Module.* wiring, DNS, proxy, and WebSocket relay.'],
+    ['Blocked', 'Authentication is not implemented', 'Credentials remain volatile in memory. The project cannot complete a supported sign-in flow.'],
+    ['Unverified', 'Rendering on a real GPU', 'Headless SwiftShader reaches first-frame presentation, then fails GLES shader compilation.'],
+  ],
+  guide: 'Read by task',
+  links: [
+    ['Install and first run', 'From release zip to the local page', '/getting-started/install/'],
+    ['System architecture', 'Runtime boundaries and data flow', '/architecture/'],
+    ['Deploy privately', 'Docker, storage, security, rollback', '/deployment/'],
+    ['HTTP reference', 'Range, DNS, proxy, relay, host contract', '/reference/http-host-contract/'],
+  ],
+  credit: 'Guild Wars artwork © ArenaNet. Loading-screen photography by Snapshot Henchman. This independent fan project is not affiliated with ArenaNet or NCSoft.',
+} : {
+  kicker: '浏览器互操作研究 / Browser interoperability research',
+  title: 'gwasm',
+  lede: '一个仅依赖 Python 标准库的运行时与浏览器宿主，用于研究 Guild Wars WebAssembly 客户端如何启动、流式读取 4.2 GB 快照，并连接原有服务。',
+  start: '本机快速开始', architecture: '阅读系统架构',
+  states: [
+    ['已验证', '客户端启动与网络路径', '离线 fixture 覆盖补丁、Range、Module.*、DNS、代理与 WebSocket relay。'],
+    ['受阻', '认证尚未实现', '凭据只短暂保存在内存，项目目前不能完成受支持的登录流程。'],
+    ['未验证', '真实 GPU 渲染', 'Headless SwiftShader 到达首帧呈现后，在 GLES shader 编译阶段失败。'],
+  ],
+  guide: '按任务阅读',
+  links: [
+    ['安装与首次启动', '从 release zip 到本地页面', '/getting-started/install/'],
+    ['系统架构', '运行时边界与数据流', '/architecture/'],
+    ['私有部署', '容器、存储、安全与回滚', '/deployment/'],
+    ['HTTP 参考', 'Range、DNS、代理、relay 与宿主契约', '/reference/http-host-contract/'],
+  ],
+  credit: 'Guild Wars 美术资产 © ArenaNet；加载画面摄影由 Snapshot Henchman 提供。本项目为独立爱好者项目，与 ArenaNet 或 NCSoft 无关联。',
+};
+---
+
+<div class="gwasm-home">
+  <section class="home-hero" aria-labelledby="home-title">
+    <img class="home-hero__image" src={bg.src} alt="" width={bg.width} height={bg.height} fetchpriority="high" />
+    <div class="home-hero__content">
+      <p class="home-kicker">{copy.kicker}</p>
+      <img class="home-logo" src={logo.src} alt="Guild Wars" width={logo.width} height={logo.height} />
+      <h1 id="home-title">{copy.title}</h1>
+      <p class="home-hero__lede">{copy.lede}</p>
+      <nav class="home-actions" aria-label={en ? 'Primary documentation' : '主要文档入口'}>
+        <a href={`${base}/getting-started/install/`}>{copy.start}</a>
+        <a href={`${base}/architecture/`}>{copy.architecture}</a>
+      </nav>
+    </div>
+  </section>
+  <section class="home-status" aria-label={en ? 'Project status' : '项目状态'}>
+    {copy.states.map(([label, title, body]) => <article><strong>{label}</strong><h2>{title}</h2><p>{body}</p></article>)}
+  </section>
+  <section class="home-sections">
+    <h2>{copy.guide}</h2>
+    <nav class="home-links" aria-label={copy.guide}>
+      {copy.links.map(([title, detail, href]) => <a href={`${base}${href}`}><strong>{title}</strong><span>{detail}</span></a>)}
+    </nav>
+  </section>
+  <p class="home-credit">{copy.credit}</p>
+</div>

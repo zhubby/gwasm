@@ -1,0 +1,61 @@
+---
+title: CLI 与环境变量
+description: gwasm.py 的命令行参数、默认值、环境变量与组合语义。
+---
+import { Aside } from '@astrojs/starlight/components';
+
+## CLI
+
+| 参数 | 默认 | 含义 |
+| --- | --- | --- |
+| `-d, --dir PATH` | `./dist` | 客户端与已发布 harness；容器为 `/data/dist` |
+| `-c, --cache PATH` | `./gwpatch-cache` | SHA-256 chunk 缓存；容器为 `/data/cache` |
+| `--bind HOST` | `127.0.0.1` | HTTP/relay 监听地址；`--remote` 时默认为 `0.0.0.0` |
+| `-p, --port PORT` | `8080` | 监听端口；`0` 可用于测试动态端口 |
+| `--origin ORIGIN` | localhost Origins | 允许的精确浏览器 Origin；可重复 |
+| `--remote` | false | 监听 `0.0.0.0`，接受任意与请求 Host 匹配的浏览器 Origin |
+| `-j, --jobs N` | `8` | chunk 并发，范围 1..8 |
+| `--build MODE` | `jspi` | `jspi`、`asyncify` 或 `both` |
+| `--no-update` | false | 跳过客户端版本检查 |
+| `--no-browser` | false | 不自动打开浏览器，也不启用 tab watchdog |
+| `-v, --verbose` | false | 记录全部 HTTP 请求 |
+| `--offline` | false | 禁止缺失 chunk 网络抓取 |
+| `--no-prefetch` | false | 禁止启动工作集后台预热 |
+| `-i, --image` | false | 启动前下载完整快照 |
+
+没有文档目录参数。服务只发现 `gwasm.py` 相邻且含 `index.html` 的 `docs-dist/`，保证 release 与容器的静态产物位置一致。
+
+## 环境变量
+
+| 名称 | 默认 | 作用 |
+| --- | --- | --- |
+| `GWASM_RELAY_DOMAINS` | `arenanetworks.com,guildwars.com` | `/dns` 严格后缀 allowlist |
+| `GWASM_RELAY_PORTS` | `6112,80,443` | TCP relay 目标端口 |
+| `GWASM_RELAY_ALLOW_PRIVATE` | unset | `1` 允许非公共地址；仅测试 |
+| `GWASM_PROXY_ROUTES` | unset | `route=host,...` 合并/覆盖 Web 路由 |
+| `GWASM_PROXY_TEMPLATE` | unset | 测试用上游模板，例如本地 fixture |
+| `GWASM_ORIGIN` | 无 | Compose 插值后作为 `--origin`；Python 不直接读取 |
+
+<Aside type="danger" title="环境变量会改变信任边界">
+Domains、ports、private-address 与 proxy route 都能扩大 relay/proxy 能力。生产配置应固定、评审并记录；不要接受来自不可信用户的环境值。
+</Aside>
+
+## 常用组合
+
+```bash
+# 本机开发，不自动打开页面
+python3 gwasm.py --no-browser -p 9000
+
+# 完整下载后用于隔离网络
+python3 gwasm.py --image
+python3 gwasm.py --offline --no-update
+
+# 私有 LAN：精确 Origin 必须与浏览器地址一致
+python3 gwasm.py --no-browser --bind 0.0.0.0 \
+  --origin http://192.168.1.20:8080
+
+# 任意远端 Host：无认证，必须在外部限制暴露范围
+python3 gwasm.py --remote --no-browser
+```
+
+`--remote` 对每次请求比较规范化后的 `Origin` 与 `Host`（包括有效端口），而不是建立任意 Origin allowlist。它适合地址变化的受信任 LAN，但不会认证访问者；固定部署优先使用明确的 `--origin`。

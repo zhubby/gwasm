@@ -63,7 +63,7 @@ LEGACY_BRANDING = [
 BRAND_MARKERS = {
     "README.md": "# gwasm\n",
     "harness/index.html": "<title>gwasm</title>",
-    "package.json": '"name": "gwasm-tests"',
+    "package.json": '"name": "gwasm"',
     "Dockerfile": 'ENTRYPOINT ["python", "/app/gwasm.py"]',
     "compose.yaml": "  gwasm:\n",
     ".github/workflows/release.yml": 'name="gwasm-${{ steps.v.outputs.tag }}"',

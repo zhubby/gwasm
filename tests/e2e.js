@@ -583,20 +583,31 @@ function waitFor(pred, timeout = 20000) {
     // Footer links. Each must open in a new tab without handing an external
     // site a window handle or the address of a server on the user's machine.
     const links = await page.evaluate(() =>
-      [...document.querySelectorAll('#loading-links a')].map((a) => ({
+      [...document.querySelectorAll('#loading-links a[target="_blank"]')].map((a) => ({
         text: a.textContent.trim(), href: a.href,
         target: a.target, rel: a.rel,
       })));
-    check('footer links are present', links.length === 2,
+    check('external footer links are present', links.length === 2,
           links.map((l) => l.text).join(','));
-    check('footer links open externally and safely',
+    check('external footer links open safely',
           links.every((l) => l.target === '_blank'
                           && l.rel.includes('noopener')
                           && l.rel.includes('noreferrer')),
           JSON.stringify(links.map((l) => l.rel)));
-    check('footer links point somewhere absolute',
+    check('external footer links are absolute',
           links.every((l) => /^https:\/\//.test(l.href)),
           links.map((l) => l.href).join(' '));
+    const docsLink = await page.evaluate(() => ({
+      href: document.getElementById('docs-link').getAttribute('href'),
+      hidden: document.getElementById('docs-link').hidden,
+      separatorHidden: document.getElementById('docs-separator').hidden,
+    }));
+    const docsBuilt = fs.existsSync(path.join(REPO, 'docs-dist', 'index.html'));
+    check('Docs link points at the same-origin portal', docsLink.href === '/docs/',
+          docsLink.href);
+    check('Docs link visibility follows build availability',
+          docsLink.hidden === !docsBuilt && docsLink.separatorHidden === !docsBuilt,
+          JSON.stringify({ docsBuilt, docsLink }));
 
     // A page error means the harness failed to parse -- the const/var class of
     // bug -- so surface it before anything else.

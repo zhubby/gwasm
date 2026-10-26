@@ -1,0 +1,31 @@
+---
+title: Snapshot and two-tier cache
+description: How a 4.2 GB virtual snapshot supports low-amplification random reads across browser, Python, and CDN.
+---
+import { Aside } from '@astrojs/starlight/components';
+import ArchitectureDiagram from '../../../../components/ArchitectureDiagram.astro';
+
+<ArchitectureDiagram type="cache" lang="en" />
+
+Wasm sees a conventional large-file interface, although the complete file need never exist. One `image.readAsync(offset, length)` may cross arbitrary chunk boundaries; each layer reads covering chunks and slices edges.
+
+## Python: content addressing and locks
+
+`ChunkStore.read()` calculates first and last chunks, reads or fetches missing content in order, then joins the requested bytes. Locks are keyed by hash: different chunks proceed concurrently, while six readers of the same uncached chunk cause one download. Touched indexes merge into `boot-chunks.json`, so an interrupted boot cannot shrink a previously learned working set.
+
+## Browser: memory and persistence
+
+- A 256 MiB memory LRU is the fastest current-page path.
+- Cache API keys include content hashes, enabling reload reuse without mixing snapshot versions.
+- An `inflight` Map shares one Promise across overlapping read/cache calls.
+- `storedHashes` changes only after Cache API writes succeed; failed optimistic writes are removed.
+
+Without Promise deduplication, one measurement saw 3,557 requests cover just 886 unique chunks, transferring 932 MB to deliver 227 MB. Deduplication protects correctness and external load, not merely speed.
+
+<Aside type="caution" title="Persistent browser hit rate remains unverified">
+Existing observations suggest quota or persistence rejection around 360 MB and poor reuse across reloads. The browser tier is documented as a risk, not a replacement for Python disk cache.
+</Aside>
+
+## Range semantics
+
+Virtual `Gw.snapshot` accepts one `bytes=start-end` or suffix Range. A full GET returns `416` to prevent accidentally assembling 4.2 GB. Ordinary static files also support a single Range; out-of-bounds, reversed, and multipart requests are rejected.

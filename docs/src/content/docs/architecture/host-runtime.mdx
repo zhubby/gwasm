@@ -1,0 +1,28 @@
+---
+title: 浏览器宿主契约
+description: Emscripten Module 接口、JSPI/Asyncify、EGL 呈现、输入与异步调用形状。
+---
+import { Aside } from '@astrojs/starlight/components';
+import ArchitectureDiagram from '../../../components/ArchitectureDiagram.astro';
+
+<ArchitectureDiagram type="host" lang="zh" />
+
+移动客户端通过普通 JavaScript `Module` 对象获取平台服务。harness 的目标不是重新实现游戏，而是提供相同形状、时序和异步语义的宿主 ABI。
+
+## `Module.*` 的硬约束
+
+`image.fileSize()` 是同步调用，所以必须在 glue 加载前读取 snapshot index。`image.readAsync()` 把结果写入 `Module.HEAPU8`。`socket.connect()` 返回带 `onopen/onclose/onmessage/send` 的对象，并把二进制 WebSocket payload 原样送回 Wasm。
+
+十个方法会被 `await` 或 `.then()`：`image.readAsync`、`image.cacheAsync`、`dns.resolve`、三个 `secureStorage` 方法、`adProvider.showInterstitial`、`ageSignals.check`、`shop.initialize`、`shop.inAppPurchase`。stub 也必须返回 Promise；仅仅“函数存在”会在连接中途崩溃。
+
+## JSPI 与 Asyncify
+
+非 iOS 且支持 `WebAssembly.Suspending` 时选择 JSPI，否则使用 Asyncify。`instantiateWasm()` 在实例化前修改 `imports.env`，优先 `instantiateStreaming()`，MIME 或平台不支持时退回 `arrayBuffer()`。模块未使用 atomics、SIMD 或 SharedArrayBuffer，因此不需要 COOP/COEP。
+
+## EGL 与输入
+
+`patchEgl()` 在 OffscreenCanvas 上建立 GLES context，交换缓冲时用 `transferToImageBitmap()` 交给可见 canvas 的 `bitmaprenderer`。尺寸同时更新 CSS 与 buffer。输入层处理 dbltap、touch 转换、右键相机、Pointer Lock 虚拟光标、五类 OSK 输入和用户手势后的音频恢复。
+
+<Aside type="caution" title="“first frame presented”不等于渲染已验证">
+Headless SwiftShader 随后在默认 GLES 3.0 vertex shader 编译失败。只有真实硬件与驱动矩阵才能关闭此风险。
+</Aside>

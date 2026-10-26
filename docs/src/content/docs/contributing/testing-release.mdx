@@ -1,0 +1,35 @@
+---
+title: 测试、CI 与发布
+description: 离线测试矩阵、浏览器验证、文档检查和 release/GHCR 发布链路。
+---
+
+## 本地测试
+
+```bash
+python3 -m unittest discover -s tests -p 'test_*.py'
+python3 tests/test_no_leaks.py
+node tests/test_harness.js
+npm run docs:check
+npm run docs:build
+node tests/e2e.js
+```
+
+Python suite 覆盖 HTTP、patch/cache、runtime、server instance 隔离、Range、relay frame 和工具参数。Host contract suite 读取 `docs/host-contract.json`，检查 `Module` adoption、方法集合、回调形状与 Promise。E2E 用真实 harness、本地合成 snapshot 和 loopback TCP fixture 驱动 Chromium，不访问生产服务。
+
+## CI 矩阵
+
+- Python 3.8 与 3.13：编译、unittest、泄漏策略；
+- Node 22.23.4：host contract、Astro 类型检查、双语 parity、静态构建、内部链接；
+- Playwright Chromium：浏览器宿主与文档 desktop/mobile 行为；
+- Docker：构建 runtime、HTTP smoke、持久卷、文档、非 root 与无 forbidden artifacts；
+- release：先复用全量 CI，再构建 docs、打 zip、发布 AMD64/ARM64 GHCR manifest。
+
+## 发布制品门槛
+
+zip 必须包含 `gwasm.py`、全部 `gwasm_core/` 和 harness、images/fonts、README/LICENSE、完整 `docs-dist/`。解压后运行 `--help` 且 `/docs/` smoke 通过。容器 runtime 不能有 Node/npm、源文档依赖、游戏二进制、cache 或 credentials。
+
+release workflow 从 tag checkout 构建，不能复用开发机 `docs-dist/`。静态文档与 Python 代码来自同一 tag，回滚时也必须作为一个版本单元。
+
+## 测试不能证明什么
+
+Fixture 不能证明真实账号认证、生产 CDN 的长期可用性或真实 GPU 驱动兼容性。发布记录应分别标注 offline suite 结果和任何人工硬件矩阵；没有实测就保持“未验证”。

@@ -1,0 +1,31 @@
+---
+title: 项目状态与限制
+description: 先了解 gwasm 已验证的能力、尚未验证的行为和明确不支持的部署方式。
+---
+
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+
+gwasm 是一个互操作研究项目：它为 Guild Wars 的 WebAssembly 客户端提供浏览器宿主，并用一个只依赖 Python 标准库的本地服务处理更新、4.2 GB 快照和游戏网络。它不是完整游戏发行版，也不绕过账号或内容所有权。
+
+<CardGrid>
+  <Card title="已验证 / Verified">客户端更新、manifest/chunk 校验、Range 快照、`Module.*` 基本契约、DNS、HTTPS 代理、WebSocket-to-TCP relay 和离线 fixture 测试。</Card>
+  <Card title="未验证 / Unverified">真实 GPU 上的最终画面。Headless Chromium 已记录 `first frame presented`，随后在 SwiftShader 的 GLES 3.0 shader 编译失败。</Card>
+  <Card title="不支持 / Unsupported">公网或不受信任的多用户部署。服务没有认证，relay 只是收紧边界的 open proxy，不是租户隔离网关。</Card>
+</CardGrid>
+
+<Aside type="caution" title="认证尚未实现">
+`login` 与 `nativeAccount` 仍是 stub；浏览器 `secureStorage` 只保存在当前页面内存。不要输入真实账号凭据，也不要把“能连接认证端点”理解为“能安全登录”。
+</Aside>
+
+## 能做什么
+
+- 用 release zip 在本机启动浏览器宿主；首次运行下载约 8 MB 客户端，再按需流式读取游戏数据。
+- 用 `--image` 提前缓存完整约 4.2 GB 快照，并在中断后按 hash 续传。
+- 在受信任本机或小型私有 LAN 中运行 Docker Compose。
+- 对客户端 Wasm 做离线扫描、符号恢复、间接表扩展和静态 detour 实验。
+
+## 边界为何重要
+
+浏览器页面可以调用同源 `/dns`、HTTPS proxy 和 WebSocket relay。默认绑定 `127.0.0.1`、精确 Origin、域名后缀、端口 allowlist 与公共单播地址检查共同构成安全边界；任何放宽都应作为安全变更评审。CDN 访问使用共享 access key，并发被有意限制为最多 8，不能通过隐藏参数绕过。
+
+下一步阅读[安装与首次启动](./install/)；准备部署前先看[拓扑与前置条件](../deployment/)。

@@ -73,6 +73,7 @@ from gwasm_core.server import (
     is_public_ip,
     lookup,
     normalize_origin,
+    origin_allowed,
     policy_from_environment,
     unframe,
     websocket_origins,
@@ -205,12 +206,16 @@ def build_parser():
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("-d", "--dir", default=None, type=Path,
                         help="where the client files live (default: ./dist)")
-    parser.add_argument("--bind", default="127.0.0.1",
-                        help="address to listen on (default: 127.0.0.1)")
+    parser.add_argument("--bind", default=None,
+                        help="address to listen on (default: 127.0.0.1, or "
+                             "0.0.0.0 with --remote)")
     parser.add_argument("-p", "--port", type=int, default=8080)
     parser.add_argument("-c", "--cache", default=None, type=Path)
     parser.add_argument("--origin", action="append", metavar="ORIGIN",
                         help="allowed http(s)://host:port origin; repeat for multiple origins")
+    parser.add_argument("--remote", action="store_true",
+                        help="accept any remote Host with same-origin checks; "
+                             "no authentication")
     parser.add_argument("-j", "--jobs", type=int, default=PREFETCH_JOBS,
                         help="concurrent chunk fetches (default %d, maximum %d)"
                              % (PREFETCH_JOBS, MAX_JOBS))
@@ -233,6 +238,7 @@ def build_parser():
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
+    args.bind = args.bind or ("0.0.0.0" if args.remote else "127.0.0.1")
     try:
         explicit_origins = sorted(set(normalize_origin(value)
                                       for value in (args.origin or [])))
@@ -255,15 +261,21 @@ def main(argv=None):
     progress = Progress()
     stop = threading.Event()
     policy = policy_from_environment()
+    docs_root = here / "docs-dist"
+    if not (docs_root / "index.html").is_file():
+        docs_root = None
     context = ServerContext(progress=progress, policy=policy,
-                            proxy_http=Http(), verbose=args.verbose)
+                            proxy_http=Http(), verbose=args.verbose,
+                            docs_root=docs_root, remote_access=args.remote)
     httpd = GwasmServer((args.bind, args.port),
                         partial(Handler, directory=str(dest)), context)
     actual_port = httpd.server_address[1]
-    context.origins = set(explicit_origins) or {
-        normalize_origin("http://127.0.0.1:%d" % actual_port),
-        normalize_origin("http://localhost:%d" % actual_port),
-    }
+    context.origins = set(explicit_origins)
+    if not context.origins and not args.remote:
+        context.origins = {
+            normalize_origin("http://127.0.0.1:%d" % actual_port),
+            normalize_origin("http://localhost:%d" % actual_port),
+        }
 
     if explicit_origins:
         url = explicit_origins[0] + "/"
@@ -315,13 +327,21 @@ def main(argv=None):
                     pass
 
     log("serving %s at %s" % (dest, url))
+    if docs_root:
+        log("docs: %s at %sdocs/" % (docs_root, url))
+    else:
+        log("docs: unavailable -- run npm run docs:build; game remains available")
+    origin_label = (", ".join(sorted(context.origins))
+                    or "any request Host (same-origin only)")
     log("bind: %s:%d; relay origins: %s"
-        % (args.bind, actual_port, ", ".join(sorted(context.origins))))
+        % (args.bind, actual_port, origin_label))
     log("relay: same origin, domains %s, ports %s"
         % (", ".join(policy.allowed_domains),
            ", ".join(str(port) for port in sorted(policy.allowed_ports))))
     if policy.allow_private:
         log("relay: WARNING -- GWASM_RELAY_ALLOW_PRIVATE=1 allows private addresses")
+    if args.remote:
+        log("remote: WARNING -- no authentication; restrict exposure externally")
 
     if not args.no_browser:
         context.watchdog = Watchdog(httpd)

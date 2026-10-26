@@ -1,0 +1,42 @@
+---
+title: 故障排查与验收
+description: 按层定位启动、数据、网络、浏览器和文档故障，并执行上线验收。
+---
+import { Aside } from '@astrojs/starlight/components';
+
+## 分层排查
+
+### 进程未启动
+
+运行 `python3 gwasm.py --help`。Python 必须为 3.8+，release 必须完整解压并包含 `gwasm_core/`、`harness/`。`Address already in use` 用 `-p 9000` 或停止占用进程解决。
+
+### 页面等待或更新失败
+
+读取终端和 `/progress.json`，不要只看浏览器 console。重启会复用已校验 chunk。磁盘不足时按需运行或释放至少 5 GB；hash 失败时不要手工改 manifest，删除对应 hash 文件后重试。
+
+### 快照读取失败
+
+确认 `snapshot-chunks.json` 指向实际 cache，Range 请求带单段 header。离线缺块会返回 `503`；完整 GET 虚拟快照返回 `416` 是设计行为。
+
+### 网络连接失败
+
+`DENY` 表示 Origin、域名、端口或地址策略拒绝；`connect FAILED` 表示策略通过但出口连接失败。反代需转发 WebSocket Upgrade 且保留浏览器发送的 Origin。不要通过允许私网来掩盖 DNS/路由错误。
+
+### 文档 404 或样式缺失
+
+源码环境先执行 `npm run docs:build`。确认 `/docs` 返回永久重定向到 `/docs/`，资源 URL 以 `/docs/_astro/` 开头，Pagefind WASM MIME 为 `application/wasm`。未知 `/docs/*` 必须 404，不能返回 Web proxy 502。
+
+## 上线验收清单
+
+- [ ] `/`、`/progress.json`、`/ping` 保持原行为，游戏 CSP 无 inline 放宽。
+- [ ] `/docs` -> `/docs/`；中英文首页与深层页均 200。
+- [ ] `/docs/_astro/*` 为 immutable；HTML、Pagefind 和其他资源可重新验证。
+- [ ] HEAD 与单段 Range 正确；编码路径穿越被 404/拒绝。
+- [ ] 语言切换、主题、双语搜索、键盘 focus、移动布局无横向溢出。
+- [ ] relay 拒绝错误 Origin、私网 IP 和非 allowlist 端口。
+- [ ] release zip 与 AMD64/ARM64 镜像含 `docs-dist/`，运行镜像无 Node/npm、游戏 Wasm、APK、key；只保留 Pagefind 搜索所需的 Wasm。
+- [ ] 明确记录认证未实现、真实 GPU 未验证、公网多用户不支持。
+
+<Aside type="note" title="回滚触发条件">
+文档 CSP 错误、Pagefind 不可加载、relay 策略变宽、Range 回归或 release 缺失文档都应阻止发布；不要以“游戏首页还能打开”作为继续上线的理由。
+</Aside>

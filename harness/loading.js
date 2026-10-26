@@ -20,7 +20,8 @@
   // goodbye -- sendBeacon promises no ordering -- and without an id the server
   // reads that stray as "still here" and never exits. A reload arrives under a
   // new id, so it still cancels the shutdown; the stray does not.
-  const id = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  const newId = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
+  let id = newId();
   const ping = (bye) => {
     const url = 'ping?id=' + id + (bye ? '&bye=1' : '');
     try {
@@ -30,6 +31,11 @@
   };
   ping();
   setInterval(ping, 1000);
+  addEventListener('pageshow', (event) => {
+    if (!event.persisted) return;
+    id = newId();
+    ping();
+  });
   addEventListener('pagehide', () => ping(true));
 })();
 
@@ -96,6 +102,14 @@ window.gwasmLoading = (function () {
       bg.classList.add('shown');
     };
     img.src = pick;
+  }).catch(() => {});
+
+  // Source checkouts can run without building the documentation. Only reveal
+  // its game-page entry when this exact server has a usable static build.
+  fetch('/docs/', { method: 'HEAD', cache: 'no-store' }).then((response) => {
+    if (!response.ok) return;
+    el('docs-link').hidden = false;
+    el('docs-separator').hidden = false;
   }).catch(() => {});
 
   // Phase one: wait for gwasm.py to finish fetching the client. Polling rather

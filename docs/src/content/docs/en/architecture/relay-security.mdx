@@ -1,0 +1,28 @@
+---
+title: Relay, network, and security
+description: Trust boundaries and failure handling for DNS, HTTPS proxying, and the WebSocket-to-TCP relay.
+---
+import { Aside } from '@astrojs/starlight/components';
+import ArchitectureDiagram from '../../../../components/ArchitectureDiagram.astro';
+
+<ArchitectureDiagram type="relay" lang="en" />
+
+Browsers cannot open raw TCP, and the game protocol is not HTTP. The handler therefore bridges same-port binary WebSocket frames to TCP. Sharing the Origin also removes separate CORS and port-discovery concerns.
+
+## WebSocket handshake
+
+The handler validates Origin, `dest` syntax, public-unicast class, port allowlist, and WebSocket key/version. Default and `--origin` operation use an exact allowlist; `--remote` instead requires the Origin hostname and effective port to match the request `Host`. It then opens upstream TCP and only then sends `101 Switching Protocols`. Reversing the order loses data because the client treats `onopen` as an established TCP connection and sends its handshake immediately.
+
+The bridge accepts masked, unfragmented client frames up to 16 MiB, rejecting RSV bits, unknown opcodes, and oversized control frames. Server frames are unmasked. Disconnect logs include byte counts in both directions to distinguish no client write, upstream refusal, and midstream closure.
+
+## DNS and Web APIs
+
+`/dns` accepts only strict `arenanetworks.com` and `guildwars.com` suffixes. When system resolution fails, a minimal UDP A-record resolver handles records such as `geodc.arenanetworks.com -> 0.0.1.2`, which carries a datacenter identifier. The Web API proxy maps only known first-label routes; unknown routes return `502`, and hop-by-hop headers are never forwarded.
+
+<Aside type="danger" title="Private-address protection is a security boundary">
+Loopback, RFC1918, CGNAT, link-local, metadata, multicast, reserved, and mapped IPv6 targets are denied by default. `GWASM_RELAY_ALLOW_PRIVATE=1` exists only for the E2E loopback fixture and must remain off in deployment.
+</Aside>
+
+## Threat model
+
+Origin checks stop ordinary cross-site pages from using the relay but do not authenticate users. `--remote` also accepts any Host pointed at the service, so every party able to reach it must be treated as trusted. Public-address checks stop an allowed page from probing a private network but do not authorize game accounts. Port allowlists constrain purpose but are not a protocol firewall. Supported deployment therefore remains one trust domain protected by a host firewall or authenticating edge.

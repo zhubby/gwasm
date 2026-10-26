@@ -26,9 +26,12 @@ __pycache__/
 .venv/
 venv/
 
-# Test tooling -- playwright-core is installed on demand by tests/e2e.js
+# Test and documentation tooling.
 node_modules/
-package-lock.json
+
+# Starlight output is generated for releases and containers.
+docs-dist/
+.astro/
 
 # Release packaging, assembled by .github/workflows/release.yml.
 dist-release/

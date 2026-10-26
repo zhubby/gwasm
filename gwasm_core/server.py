@@ -4,6 +4,7 @@ import base64
 import hashlib
 import ipaddress
 import json
+import mimetypes
 import os
 import re
 import select
@@ -15,7 +16,7 @@ from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse, urlsplit
+from urllib.parse import parse_qs, quote, unquote_to_bytes, urlparse, urlsplit
 
 from .runtime import log
 
@@ -36,6 +37,9 @@ MAX_WS_FRAME = 16 * 1024 * 1024
 ROUTE_RE = re.compile(r"^/([a-z0-9][a-z0-9-]{0,30})(/.*)$", re.I)
 RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 
+mimetypes.add_type("application/wasm", ".wasm")
+mimetypes.add_type("application/wasm", ".pagefind")
+
 
 @dataclass
 class RelayPolicy:
@@ -55,6 +59,8 @@ class ServerContext:
     proxy_http: object = None
     watchdog: object = None
     verbose: bool = False
+    docs_root: object = None
+    remote_access: bool = False
 
 
 def policy_from_environment(env=None):
@@ -193,6 +199,54 @@ def websocket_origins(origins):
     return sorted(set(output))
 
 
+def _normalized_host(value):
+    if not value or any(character in value for character in "\r\n\t /?#@"):
+        return None
+    try:
+        parsed = urlsplit("//" + value)
+        hostname, port = parsed.hostname, parsed.port
+    except ValueError:
+        return None
+    if (not hostname or parsed.username is not None or parsed.password is not None
+            or parsed.path or parsed.query or parsed.fragment):
+        return None
+    if ":" in hostname:
+        try:
+            ipaddress.IPv6Address(hostname)
+        except ValueError:
+            return None
+        normalized = "[%s]" % hostname.lower()
+    else:
+        if not re.fullmatch(r"[a-z0-9.-]+", hostname, re.I):
+            return None
+        normalized = hostname.lower()
+    return normalized + ((":%d" % port) if port is not None else "")
+
+
+def origin_allowed(origin, request_host, origins, remote_access=False):
+    if origin in origins:
+        return True
+    if not remote_access:
+        return False
+    host = _normalized_host(request_host)
+    try:
+        parsed = urlsplit(origin or "")
+        origin_port = parsed.port
+    except ValueError:
+        return False
+    if (parsed.scheme not in ("http", "https") or not parsed.hostname
+            or parsed.username is not None or parsed.password is not None
+            or parsed.path or parsed.query or parsed.fragment):
+        return False
+    origin_host = _normalized_host(parsed.netloc)
+    if not host or not origin_host:
+        return False
+    request = urlsplit("//" + host)
+    default_port = 443 if parsed.scheme == "https" else 80
+    return (parsed.hostname.lower() == request.hostname.lower()
+            and (origin_port or default_port) == (request.port or default_port))
+
+
 def is_public_ip(value):
     try:
         address = ipaddress.ip_address(value)
@@ -315,18 +369,122 @@ class Handler(SimpleHTTPRequestHandler):
         if self.context.verbose or (isinstance(code, int) and code >= 400):
             super().log_request(code, size)
 
+    def send_response(self, code, message=None):
+        self._response_code = int(code)
+        super().send_response(code, message)
+
     def end_headers(self):
         self.send_header("Accept-Ranges", "bytes")
-        connect = " ".join(["'self'"] + websocket_origins(self.context.origins))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Security-Policy",
-                         "default-src 'self'; connect-src %s; " % connect +
-                         "img-src 'self' data:; font-src 'self'; "
-                         "script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; "
-                         "object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+        if self._is_docs_request():
+            path = self._decoded_path() or ""
+            immutable = (path.startswith("/docs/_astro/")
+                         and self._response_code in (HTTPStatus.OK,
+                                                     HTTPStatus.PARTIAL_CONTENT))
+            cache = ("public, max-age=31536000, immutable"
+                     if immutable else "no-cache")
+            self.send_header("Cache-Control", cache)
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; connect-src 'self'; img-src 'self' data:; "
+                "font-src 'self'; script-src 'self' 'unsafe-inline' "
+                "'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; "
+                "worker-src 'self'; object-src 'none'; base-uri 'self'; "
+                "frame-ancestors 'none'")
+        else:
+            origins = set(self.context.origins)
+            if self.context.remote_access:
+                host = _normalized_host(self.headers.get("Host"))
+                if host:
+                    origins.update(("http://" + host, "https://" + host))
+            connect = " ".join(["'self'"] + websocket_origins(origins))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Security-Policy",
+                             "default-src 'self'; connect-src %s; " % connect +
+                             "img-src 'self' data:; font-src 'self'; "
+                             "script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; "
+                             "object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         super().end_headers()
+
+    def _path_bytes(self):
+        return unquote_to_bytes(urlsplit(self.path).path)
+
+    def _decoded_path(self):
+        try:
+            return self._path_bytes().decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+
+    def _is_docs_request(self):
+        path = self._path_bytes()
+        return path == b"/docs" or path.startswith(b"/docs/")
+
+    def _docs_file(self, path):
+        root = self.context.docs_root
+        if root is None or "\\" in path or "\0" in path:
+            return None
+        relative = path[len("/docs/"):]
+        parts = relative.split("/") if relative else []
+        if any(part in (".", "..") for part in parts):
+            return None
+        root = Path(root).resolve()
+        target = root.joinpath(*parts)
+        try:
+            resolved = target.resolve()
+            resolved.relative_to(root)
+        except (OSError, ValueError):
+            return None
+        return resolved
+
+    def _serve_docs(self, head_only=False):
+        path = self._decoded_path()
+        if path == "/docs":
+            query = urlsplit(self.path).query
+            self.send_response(HTTPStatus.PERMANENT_REDIRECT)
+            self.send_header("Location", "/docs/" + (("?" + query) if query else ""))
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path is None or not path.startswith("/docs/"):
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        target = self._docs_file(path)
+        if target is None:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        if target.is_dir():
+            if not path.endswith("/") and (target / "index.html").is_file():
+                query = urlsplit(self.path).query
+                self.send_response(HTTPStatus.PERMANENT_REDIRECT)
+                location = quote(path, safe="/") + "/"
+                self.send_header("Location", location + (("?" + query) if query else ""))
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            target = target / "index.html"
+        if not target.is_file():
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        total = target.stat().st_size
+        byte_range = self._parse_range(total)
+        if byte_range == "invalid":
+            return
+        if byte_range is not None:
+            start, end = byte_range
+            with target.open("rb") as handle:
+                handle.seek(start)
+                data = handle.read(end - start + 1)
+            return self._send_range(data, start, end, total,
+                                    self.guess_type(str(target)), not head_only)
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", self.guess_type(str(target)))
+        self.send_header("Content-Length", str(total))
+        self.send_header("Last-Modified", self.date_time_string(target.stat().st_mtime))
+        self.end_headers()
+        if not head_only:
+            with target.open("rb") as handle:
+                self.copyfile(handle, self.wfile)
 
     def _bail(self, code, why):
         log("DENY ws", why)
@@ -335,7 +493,9 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _websocket(self, query):
         origin = self.headers.get("Origin")
-        if origin not in self.context.origins:
+        if not origin_allowed(origin, self.headers.get("Host"),
+                              self.context.origins,
+                              self.context.remote_access):
             return self._bail(403, "origin %s" % origin)
         destination = query.get("dest", [""])[0]
         match = re.match(r"^\[?([0-9a-fA-F:.]+)\]?:(\d+)$", destination)
@@ -432,13 +592,14 @@ class Handler(SimpleHTTPRequestHandler):
             return "invalid"
         return start, min(end, total - 1)
 
-    def _send_range(self, data, start, end, total, content_type):
+    def _send_range(self, data, start, end, total, content_type, send_body=True):
         self.send_response(HTTPStatus.PARTIAL_CONTENT)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, total))
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
-        self.wfile.write(data)
+        if send_body:
+            self.wfile.write(data)
 
     def _try_proxy(self):
         local = Path(self.translate_path(self.path.split("?")[0]))
@@ -449,7 +610,9 @@ class Handler(SimpleHTTPRequestHandler):
             return False
         route, rest = match.group(1), match.group(2)
         origin = self.headers.get("Origin")
-        if origin is not None and origin not in self.context.origins:
+        if origin is not None and not origin_allowed(
+                origin, self.headers.get("Host"), self.context.origins,
+                self.context.remote_access):
             log("DENY proxy origin", origin)
             self.send_error(HTTPStatus.FORBIDDEN, "origin not allowed")
             return True
@@ -514,10 +677,17 @@ class Handler(SimpleHTTPRequestHandler):
             if length:
                 self.rfile.read(length)
             return self._ping(parse_qs(parts.query))
+        if self._is_docs_request():
+            return self.send_error(HTTPStatus.NOT_FOUND)
         if not self._try_proxy():
             self.send_error(HTTPStatus.NOT_FOUND)
 
     do_PUT = do_POST
+
+    def do_HEAD(self):
+        if self._is_docs_request():
+            return self._serve_docs(head_only=True)
+        super().do_HEAD()
 
     def do_GET(self):
         parts = urlparse(self.path)
@@ -529,6 +699,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self._dns(query)
         if parts.path == "/ping":
             return self._ping(query)
+        if self._is_docs_request():
+            return self._serve_docs()
         if name == "progress.json":
             body = json.dumps(self.context.progress.snapshot()).encode()
             self.send_response(HTTPStatus.OK)

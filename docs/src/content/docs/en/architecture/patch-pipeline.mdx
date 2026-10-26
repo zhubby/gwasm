@@ -1,0 +1,30 @@
+---
+title: Manifest and chunk pipeline
+description: Version discovery, manifest parsing, content-addressed downloads, concurrency deduplication, and atomic publication.
+---
+import { Aside } from '@astrojs/starlight/components';
+import ArchitectureDiagram from '../../../../components/ArchitectureDiagram.astro';
+
+<ArchitectureDiagram type="update" lang="en" />
+
+The updater treats the upstream manifest as immutable facts, not download suggestions. Each target file is a hash list. A chunk enters cache only after decompression, length validation, and SHA-256 verification. Plain and gzip transport share content verification, so HTTP encoding never changes cache identity.
+
+## Pipeline stages
+
+1. Fetch `version.json` and select the `jspi`, `asyncify`, or `both` file set.
+2. Parse the manifest and validate fields, sizes, chunk size, and hash shape.
+3. Schedule missing hashes; `Http` reuses a `(scheme, host)` connection per thread.
+4. Retry transient network failures with exponential backoff; do not retry 401/403/404 denials.
+5. Store verified content by hash. Replace output files and `snapshot-chunks.json` through temporary files to avoid half-written state.
+
+## Concurrency and service responsibility
+
+`PREFETCH_JOBS` defaults to and is capped at eight. A 256 KB request has measured latency near 650 ms, so concurrency does improve throughput, but every installation shares one access key. The limit protects both remote service and reliability; it is not a tuning knob waiting to be bypassed.
+
+<Aside type="note" title="Updates do not assemble a 4.2 GB file">
+`snapshot-chunks.json` records total size, chunk size, cache path, and hashes. HTTP Range assembles bytes per request. Only standalone tooling with an explicit output assembles the full snapshot.
+</Aside>
+
+## Update compatibility
+
+A new manifest reuses old cached chunks with identical hashes. The index changes only after metadata validation, so a crash does not point the old version at an incomplete new set. Unit tests cover gzip, resume, hash failures, disk capacity, and concurrent same-chunk deduplication.

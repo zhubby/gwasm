@@ -65,8 +65,31 @@ class ToolArgumentTests(unittest.TestCase):
             [sys.executable, str(ROOT / "gwasm.py"), "--help"],
             capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
-        for flag in ("--bind", "--origin", "--offline", "--image", "--build"):
+        for flag in ("--bind", "--origin", "--remote", "--offline", "--image",
+                     "--build"):
             self.assertIn(flag, result.stdout)
+
+    def test_remote_mode_selects_public_listener_by_default(self):
+        class ServerCreated(Exception):
+            pass
+
+        def captured_bind(arguments):
+            seen = []
+
+            def create(address, *_args):
+                seen.append(address[0])
+                raise ServerCreated
+
+            with tempfile.TemporaryDirectory() as directory, \
+                    mock.patch.object(gwasm, "GwasmServer", side_effect=create), \
+                    self.assertRaises(ServerCreated):
+                gwasm.main(arguments + ["--dir", directory])
+            return seen[0]
+
+        self.assertEqual(captured_bind([]), "127.0.0.1")
+        self.assertEqual(captured_bind(["--remote"]), "0.0.0.0")
+        self.assertEqual(captured_bind(
+            ["--remote", "--bind", "192.0.2.10"]), "192.0.2.10")
 
     def test_missing_core_has_friendly_diagnostic(self):
         with tempfile.TemporaryDirectory() as directory:

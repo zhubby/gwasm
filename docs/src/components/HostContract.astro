@@ -1,0 +1,24 @@
+---
+import contract from '../../host-contract.json';
+const { lang = 'zh' } = Astro.props;
+const en = lang === 'en';
+const promises = new Set(contract.promiseReturning);
+const noteFor = (name: string) => Object.entries(contract.notes)
+  .find(([key]) => name === key || name.startsWith(`${key}.`))?.[1];
+---
+
+<section aria-labelledby="contract-title">
+  <h2 id="contract-title">{en ? `Host contract v${contract.version}` : `宿主契约 v${contract.version}`}</h2>
+  <p>{en ? 'Rendered directly from docs/host-contract.json. Tests and this page consume the same source of truth.' : '以下内容直接读取 docs/host-contract.json；测试与本页共享同一个事实来源。'}</p>
+  <div class="contract-list">
+    {contract.required.map((name) => (
+      <div class="contract-row">
+        <code>{name}</code>
+        <span>{noteFor(name) || (en ? 'Required browser host surface.' : '浏览器宿主必须提供。')}</span>
+        {promises.has(name) && <span class="contract-badge">Promise</span>}
+      </div>
+    ))}
+  </div>
+  <h3>{en ? 'Additional promise-returning calls' : '其他必须返回 Promise 的调用'}</h3>
+  <p><code>{contract.promiseReturning.filter((name) => !contract.required.includes(name)).join(', ')}</code></p>
+</section>

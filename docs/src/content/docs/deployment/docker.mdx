@@ -1,0 +1,37 @@
+---
+title: Docker Compose
+description: 构建或拉取镜像、配置精确 Origin、验证持久卷与运行镜像边界。
+---
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+官方工作流发布 `linux/amd64` 与 `linux/arm64` 到 GHCR。镜像使用多阶段构建：Node stage 固定安装 lockfile 并生成 `docs-dist/`；Python 3.13 slim runtime 只复制运行代码、静态资产与文档产物，以非 root `gwasm` 用户执行。
+
+<Steps>
+1. 创建 `.env`，填写浏览器实际打开的 Origin：`GWASM_ORIGIN=http://192.168.1.20:8080`。不能带路径或尾斜杠。
+2. 执行 `docker compose up -d`。Compose 把 8080 映射到所有主机接口，因此必须另配主机防火墙。
+3. 查看 `docker compose logs -f gwasm`，等待 `serving`、`relay` 和 snapshot 状态。
+4. 打开 `http://192.168.1.20:8080/`，并确认 `http://192.168.1.20:8080/docs/` 可访问。
+</Steps>
+
+```bash
+docker compose pull
+docker compose up -d
+docker compose ps
+docker compose logs --tail=100 gwasm
+```
+
+## 持久卷
+
+`gwasm-data` 挂到 `/data`，其中 `/data/cache` 是内容寻址 chunk，`/data/dist` 是已发布客户端和 snapshot index。`docker compose down` 保留卷；`down -v` 会删除全部下载数据且不可恢复。文档不在卷中，所以镜像升级立即切换文档版本。
+
+## 镜像验收
+
+```bash
+docker run --rm ghcr.io/zhubby/gwasm:latest --help
+docker run --rm --entrypoint sh ghcr.io/zhubby/gwasm:latest \
+  -c 'test -f /app/docs-dist/index.html && ! command -v node && ! command -v npm'
+```
+
+<Aside type="caution" title="容器不提供 GPU">
+Wasm 和 WebGL 在访问页面的用户浏览器中运行。给容器添加 GPU 设备不会验证真实浏览器渲染，也不会解决当前认证缺口。
+</Aside>

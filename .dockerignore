@@ -9,13 +9,11 @@ __pycache__
 # Development-only sources and tooling.
 tests
 tools
-docs
-package.json
-package-lock.json
 
 # Derived or user-provided game artifacts.
 dist
 dist-release
+docs-dist
 gwpatch-cache
 *.key
 *.apk

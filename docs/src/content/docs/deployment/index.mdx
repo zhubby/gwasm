@@ -1,0 +1,32 @@
+---
+title: 拓扑与前置条件
+description: 选择 release、本机 Python、Docker 或源码构建，并理解网络、Origin 与持久化边界。
+---
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+import ArchitectureDiagram from '../../../components/ArchitectureDiagram.astro';
+
+<ArchitectureDiagram type="release" lang="zh" />
+
+部署目标是让一个受信任用户的浏览器通过同源 Python 服务访问客户端、快照和 relay。Astro 只生成静态文档：release zip 携带 `docs-dist/`，容器在 Node builder stage 生成它，最终镜像仍然只运行 Python。
+
+<CardGrid>
+  <Card title="Release zip">最少依赖，适合本机桌面。解压后运行 `python3 gwasm.py`，文档与游戏同源。</Card>
+  <Card title="Docker Compose">适合固定主机与私有 LAN。`/data` 保存客户端下载与 chunk，镜像内 `/app/docs-dist` 随版本更新。</Card>
+  <Card title="源码构建">贡献者路径。需要 Node 22.23.4+ 构建文档，但 Python 运行时仍无第三方依赖。</Card>
+</CardGrid>
+
+## 部署前置条件
+
+1. 明确浏览器看到的完整 Origin，包括 scheme、host、port；容器模式用 `GWASM_ORIGIN` 传入。
+2. 防火墙只允许预期设备；公网入口必须另有认证网关，但项目仍不支持共享多用户实例。
+3. 允许出站 DNS、HTTPS 与 TCP 6112/80/443 到许可的 ArenaNet/Guild Wars 服务。
+4. 按需模式至少预留 1 GB；完整快照约 4.2 GB，运维上预留 5 GB 及 inode/备份余量。
+5. TLS 终止必须保持 `Host`/Origin 一致并支持 WebSocket Upgrade 和 Range。
+
+<Aside type="danger" title="反向代理不是安全模型">
+它可以终止 TLS、限制源地址和增加外部认证，但 Python relay 仍是面向单个信任域的受限 open proxy。不要把一个实例提供给互不信任的用户。
+</Aside>
+
+## 数据位置
+
+Release 默认在 `gwasm.py` 相邻写 `dist/`、`gwpatch-cache/`。容器固定使用 `/data/dist` 与 `/data/cache`；文档永远位于只读 `/app/docs-dist`，不得复制到 `/data`，否则升级镜像后旧卷会遮蔽新文档。

@@ -1,0 +1,40 @@
+---
+title: 安装与首次启动
+description: 从 release zip 或源码启动 gwasm，并理解首次下载、停止和恢复行为。
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+## 前置条件
+
+- Python 3.8 或更新版本；运行时无需 `pip install`。
+- Chromium 系浏览器是目前覆盖最完整的路径；Safari/iOS 使用 Asyncify build。
+- 首次按需启动预留至少 1 GB；`--image` 建议预留 5 GB。
+- 网络需要访问项目更新来源以及 ArenaNet 内容与游戏服务。
+
+<Steps>
+1. 从 GitHub Release 下载 zip 并完整解压。不要在压缩包预览器里双击 `gwasm.py`。
+2. 在解压目录运行 `python3 gwasm.py`；Windows 也可以双击该文件。
+3. 浏览器打开 `http://127.0.0.1:8080/`。文档入口是同源 `/docs/`。
+4. 保持终端运行。关闭最后一个由启动器打开的页面后，watchdog 会延迟退出；刷新或第二个标签页不会误停服务。
+</Steps>
+
+```bash
+python3 gwasm.py
+# 先下载完整快照
+python3 gwasm.py --image
+# 仅使用本地已有内容
+python3 gwasm.py --offline --no-update
+```
+
+## 首次运行发生什么
+
+启动器先把 `harness/`、图片索引和字体发布到运行目录，再在后台检查客户端版本。客户端文件约 8 MB；页面随后通过 Range 请求触发 256 KB chunk 下载。典型首次启动工作集约数百 MB，不等于完整快照。进度由 `/progress.json` 提供，模块加载阶段由 `Module.setStartupProgress` 接续。
+
+<Aside type="note" title="所有下载都可恢复">
+内容块按 SHA-256 命名。中断只留下已经校验成功的块；再次运行会跳过它们。不要把 `gwpatch-cache/` 当作临时目录定期清空。
+</Aside>
+
+## 何时算就绪
+
+服务进程监听端口只代表 HTTP 已启动。`/progress.json` 中 `done: true` 才表示客户端更新与快照索引可用。浏览器显示 Ready 后，Wasm 仍可能继续预热启动工作集；认证和真实 GPU 渲染限制依然存在。

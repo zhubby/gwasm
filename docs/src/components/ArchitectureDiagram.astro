@@ -1,0 +1,49 @@
+---
+type Diagram = 'context' | 'startup' | 'update' | 'cache' | 'host' | 'relay' | 'release';
+const { type, lang = 'zh' } = Astro.props as { type: Diagram; lang?: 'zh' | 'en' };
+const en = lang === 'en';
+const sets = {
+  context: {
+    zh: ['系统上下文', [['用户浏览器','UI + Wasm','同源 HTTP/WS'],['gwasm.py','静态文件 + Range','DNS / HTTPS / TCP'],['内容寻址缓存','256 KB chunks','本机持久化'],['ArenaNet 服务','CDN + 游戏服务','外部生产系统']]],
+    en: ['System context', [['User browser','UI + Wasm','same-origin HTTP/WS'],['gwasm.py','static files + Range','DNS / HTTPS / TCP'],['Content cache','256 KB chunks','local persistence'],['ArenaNet services','CDN + game services','external production']]],
+  },
+  startup: {
+    zh: ['启动时序', [['启动器','检查与发布 harness','Python 3.8+'],['更新线程','manifest + 客户端','可恢复'],['浏览器宿主','载入索引与 glue','JSPI / Asyncify'],['Wasm 客户端','按需读取快照','首帧与网络']]],
+    en: ['Startup sequence', [['Launcher','checks + publishes harness','Python 3.8+'],['Update thread','manifest + client','resumable'],['Browser host','index + glue','JSPI / Asyncify'],['Wasm client','snapshot on demand','first frame + network']]],
+  },
+  update: {
+    zh: ['更新管线', [['版本端点','version.json','选择 build'],['Manifest','hash + size','不可变事实'],['Chunk worker','最多 8 并发','校验 SHA-256'],['发布目录','原子替换索引','旧数据可复用']]],
+    en: ['Update pipeline', [['Version endpoint','version.json','select build'],['Manifest','hash + size','immutable facts'],['Chunk workers','up to 8','verify SHA-256'],['Published dist','atomic index replace','reuse old content']]],
+  },
+  cache: {
+    zh: ['快照缓存数据面', [['Wasm Range','任意 offset / length','并发重叠'],['浏览器缓存','256 MiB LRU + Cache API','Promise 去重'],['Python ChunkStore','按 hash 加锁','Range 拼接'],['CDN chunk','256 KB','按内容寻址']]],
+    en: ['Snapshot cache data plane', [['Wasm range','any offset / length','overlapping reads'],['Browser cache','256 MiB LRU + Cache API','promise dedupe'],['Python ChunkStore','lock by hash','assemble range'],['CDN chunk','256 KB','content addressed']]],
+  },
+  host: {
+    zh: ['浏览器宿主接口', [['Emscripten glue','全局 var Module','调用平台能力'],['Module.image','同步 size + 异步 read','快照数据面'],['Module.socket / dns','同源适配','WebSocket + /dns'],['平台 stub','Promise 形状稳定','认证仍未实现']]],
+    en: ['Browser host interface', [['Emscripten glue','global var Module','calls platform APIs'],['Module.image','sync size + async read','snapshot data plane'],['Module.socket / dns','same-origin adapters','WebSocket + /dns'],['Platform stubs','stable promise shapes','auth still absent']]],
+  },
+  relay: {
+    zh: ['Relay 信任边界', [['网页 Origin','必须精确匹配','浏览器边界'],['同源 relay','地址 + 端口策略','受限 open proxy'],['公共单播 IP','拒绝 LAN / metadata','默认安全线'],['上游服务','6112 / 80 / 443','生产流量']]],
+    en: ['Relay trust boundary', [['Page Origin','exact match required','browser boundary'],['Same-origin relay','address + port policy','constrained open proxy'],['Public unicast IP','deny LAN / metadata','default boundary'],['Upstream service','6112 / 80 / 443','production traffic']]],
+  },
+  release: {
+    zh: ['容器与发布拓扑', [['Node 构建阶段','Astro + Starlight','生成 docs-dist'],['Release / 镜像','复制静态产物','构建时强制存在'],['Python 运行镜像','无 Node / npm','只读 /app/docs-dist'],['/data 卷','cache + dist','不保存文档版本']]],
+    en: ['Container and release topology', [['Node build stage','Astro + Starlight','produces docs-dist'],['Release / image','copies static output','required at build time'],['Python runtime image','no Node / npm','read-only /app/docs-dist'],['/data volume','cache + dist','never stores docs version']]],
+  },
+} as const;
+const [caption, nodes] = sets[type][en ? 'en' : 'zh'];
+---
+
+<figure class="arch-diagram" aria-label={caption}>
+  <figcaption><strong>{caption}</strong> · {en ? 'Read left to right; arrows show the primary request or artifact flow.' : '从左向右阅读；箭头表示主要请求或制品流向。'}</figcaption>
+  <div class="arch-flow" style={`--diagram-columns:${nodes.length}`}>
+    {nodes.map(([title, detail, note], index) => (
+      <div class:list={['arch-node', index === 1 && 'arch-node--gold', type === 'relay' && index === 2 && 'arch-node--danger']}>
+        <span class="arch-node__eyebrow">{String(index + 1).padStart(2, '0')}</span>
+        <strong>{title}</strong><small>{detail}</small><small>{note}</small>
+      </div>
+    ))}
+  </div>
+  <div class="arch-legend"><span><b>■</b> {en ? 'gold: control or build boundary' : '金色：控制或构建边界'}</span><span><b>→</b> {en ? 'primary direction, not every callback' : '主要方向，不表示全部回调'}</span></div>
+</figure>

@@ -1,0 +1,28 @@
+---
+title: Relay、网络与安全
+description: DNS、HTTPS proxy、WebSocket-to-TCP relay 的信任边界与失败处理。
+---
+import { Aside } from '@astrojs/starlight/components';
+import ArchitectureDiagram from '../../../components/ArchitectureDiagram.astro';
+
+<ArchitectureDiagram type="relay" lang="zh" />
+
+浏览器不能打开原始 TCP，而游戏协议不是 HTTP。Handler 因此在同一端口把 WebSocket 二进制帧桥接到 TCP；相同 Origin 同时避免额外 CORS 和端口发现。
+
+## WebSocket 握手
+
+处理器先验证 Origin、`dest` 地址语法、公共单播属性、端口 allowlist、WebSocket key/version；再建立上游 TCP；只有成功后才发送 `101 Switching Protocols`。默认和 `--origin` 使用精确白名单；`--remote` 则要求 Origin 的主机与有效端口匹配请求 `Host`。顺序不能反转，因为客户端把 `onopen` 当作 TCP 已建立并立即发送握手。
+
+桥接循环只接受 masked、非分片、最大 16 MiB 的客户端帧，拒绝 RSV、未知 opcode 和超长 control frame。服务端回帧不 mask。断开时记录上下行字节，可区分客户端未发送、上游拒绝和中途关闭。
+
+## DNS 与 Web API
+
+`/dns` 只接受严格后缀匹配的 `arenanetworks.com`、`guildwars.com`。系统解析失败时，最小 UDP A-record resolver 可处理 `geodc.arenanetworks.com -> 0.0.1.2` 这种数据中心编号。Web API 代理只映射已知首段路由；未知 route 返回 `502`，不猜域名；hop-by-hop header 不转发。
+
+<Aside type="danger" title="私网保护是不可拆分的安全边界">
+默认拒绝 loopback、RFC1918、CGNAT、link-local、metadata、multicast、保留地址和映射 IPv6。`GWASM_RELAY_ALLOW_PRIVATE=1` 只供 E2E loopback fixture，正常部署不得启用。
+</Aside>
+
+## 威胁模型
+
+Origin 检查防止普通跨站网页直接调用 relay，但不认证用户；`--remote` 还允许任意指向该服务的 Host，因此必须把所有能连接服务的人视为受信任用户。公共地址检查防止网页借 relay 探测内网，但不判断游戏账号授权；端口 allowlist 限制用途，但不提供协议级防火墙。因此仍只支持单个信任域，并要求外部防火墙或认证代理限制来源。

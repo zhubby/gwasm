@@ -33,6 +33,7 @@ from gwasm_core.server import (
     frame,
     is_public_ip,
     normalize_origin,
+    origin_allowed,
     policy_from_environment,
     unframe,
     websocket_origins,
@@ -108,6 +109,101 @@ class ServerFixture:
         self.thread.join(timeout=2)
 
 
+class DocumentationServerTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        root = Path(self.temp.name)
+        self.game = root / "game"
+        self.docs = root / "docs-dist"
+        (self.docs / "en").mkdir(parents=True)
+        (self.docs / "_astro").mkdir()
+        (self.docs / "pagefind").mkdir()
+        self.game.mkdir()
+        (self.game / "index.html").write_text("game")
+        (self.docs / "index.html").write_text("docs-zh")
+        (self.docs / "en" / "index.html").write_text("docs-en")
+        (self.docs / "_astro" / "app.js").write_text("asset")
+        (self.docs / "pagefind" / "pagefind.wasm").write_bytes(b"wasm-test")
+        (self.docs / "pagefind" / "wasm.en.pagefind").write_bytes(b"pagefind")
+        self.proxy = FakeProxy("docs-must-not-proxy")
+        self.context = ServerContext(
+            progress=Progress(), docs_root=self.docs,
+            origins={"http://127.0.0.1:1"}, proxy_http=self.proxy)
+        self.fixture = ServerFixture(self.game, self.context)
+
+    def tearDown(self):
+        self.fixture.close()
+        self.temp.cleanup()
+
+    def raw_request(self, path, method="GET", headers=None):
+        import http.client
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", self.fixture.port, timeout=5)
+        connection.request(method, path, headers=headers or {})
+        response = connection.getresponse()
+        result = response.status, response.headers, response.read()
+        connection.close()
+        return result
+
+    def test_docs_redirect_locales_mime_head_and_range(self):
+        status, headers, body = self.raw_request("/docs")
+        self.assertEqual((status, headers["Location"], body),
+                         (308, "/docs/", b""))
+        status, headers, body = self.raw_request("/docs", "HEAD")
+        self.assertEqual((status, headers["Location"], body),
+                         (308, "/docs/", b""))
+        self.assertEqual(request(self.fixture.url + "/docs/")[2], b"docs-zh")
+        self.assertEqual(request(self.fixture.url + "/docs/en/")[2], b"docs-en")
+
+        status, headers, body = self.raw_request(
+            "/docs/pagefind/pagefind.wasm", "HEAD")
+        self.assertEqual((status, body), (200, b""))
+        self.assertEqual(headers.get_content_type(), "application/wasm")
+        self.assertEqual(headers["Content-Length"], "9")
+
+        status, headers, body = self.raw_request(
+            "/docs/pagefind/pagefind.wasm", headers={"Range": "bytes=1-3"})
+        self.assertEqual((status, body), (206, b"asm"))
+        self.assertEqual(headers["Content-Range"], "bytes 1-3/9")
+        self.assertEqual(self.raw_request(
+            "/docs/pagefind/wasm.en.pagefind", "HEAD")[1].get_content_type(),
+            "application/wasm")
+
+    def test_docs_cache_and_csp_are_isolated_from_game(self):
+        _, docs_headers, _ = self.raw_request("/docs/")
+        _, asset_headers, _ = self.raw_request("/docs/_astro/app.js")
+        _, missing_asset_headers, _ = self.raw_request(
+            "/docs/_astro/missing.js")
+        _, game_headers, _ = self.raw_request("/")
+        self.assertEqual(docs_headers["Cache-Control"], "no-cache")
+        self.assertIn("immutable", asset_headers["Cache-Control"])
+        self.assertEqual(missing_asset_headers["Cache-Control"], "no-cache")
+        self.assertIn("'unsafe-inline'", docs_headers["Content-Security-Policy"])
+        self.assertNotIn("'unsafe-inline'", game_headers["Content-Security-Policy"])
+        self.assertIn("'wasm-unsafe-eval'",
+                      docs_headers["Content-Security-Policy"])
+        self.assertIn("worker-src 'self'",
+                      docs_headers["Content-Security-Policy"])
+        self.assertNotIn("blob:", docs_headers["Content-Security-Policy"])
+
+    def test_missing_and_traversal_never_reach_proxy(self):
+        paths = [
+            "/docs/missing/", "/docs/../secret", "/docs/%2e%2e/secret",
+            "/docs%2f%2e%2e%2fsecret", "/docs/%5c..%5csecret",
+            "/docs%2f%ff",
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertEqual(self.raw_request(path)[0], 404)
+        self.assertEqual(self.raw_request("/docs/missing", "POST")[0], 404)
+        self.assertEqual(self.proxy.urls, [])
+
+    def test_docs_can_be_absent_without_affecting_game(self):
+        self.context.docs_root = None
+        self.assertEqual(self.raw_request("/docs/")[0], 404)
+        self.assertEqual(self.raw_request("/")[2], b"game")
+
+
 class FramingAndPolicyTests(unittest.TestCase):
     def test_frame_sizes_and_masked_round_trip(self):
         for size in (5, 200, 70_000):
@@ -156,6 +252,25 @@ class FramingAndPolicyTests(unittest.TestCase):
                       "http://*.example.com:80"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 normalize_origin(value)
+
+    def test_remote_origin_must_match_request_host(self):
+        exact = {"https://fixed.example"}
+        self.assertTrue(origin_allowed(
+            "https://fixed.example", "other.example", exact, False))
+        self.assertTrue(origin_allowed(
+            "http://play.example:8080", "PLAY.EXAMPLE:8080", exact, True))
+        self.assertTrue(origin_allowed(
+            "https://[2001:db8::1]", "[2001:db8::1]:443", exact, True))
+        for origin, host in (
+                ("https://evil.example", "play.example"),
+                ("http://play.example:8081", "play.example:8080"),
+                ("https://user@play.example", "play.example"),
+                ("https://play.example:99999", "play.example"),
+                ("https://play.example", "play.example:bad"),
+                ("null", "play.example"),
+                ("https://play.example", "bad host")):
+            with self.subTest(origin=origin, host=host):
+                self.assertFalse(origin_allowed(origin, host, exact, True))
 
     def test_policy_is_parsed_once_from_supplied_environment(self):
         policy = policy_from_environment({
@@ -283,19 +398,20 @@ class ServerIsolationTests(unittest.TestCase):
         self.tcp.close()
         self.temp.cleanup()
 
-    def websocket_status(self, fixture, destination, origin):
+    def websocket_status(self, fixture, destination, origin, host=None):
         connection = socket.create_connection(("127.0.0.1", fixture.port), 5)
         try:
             key = base64.b64encode(os.urandom(16)).decode()
+            host = host or "127.0.0.1:%d" % fixture.port
             wire = (
                 "GET /?dest=%s HTTP/1.1\r\n"
-                "Host: 127.0.0.1:%d\r\n"
+                "Host: %s\r\n"
                 "Upgrade: websocket\r\n"
                 "Connection: Upgrade\r\n"
                 "Sec-WebSocket-Key: %s\r\n"
                 "Sec-WebSocket-Version: 13\r\n"
                 "Origin: %s\r\n\r\n"
-                % (destination, fixture.port, key, origin))
+                % (destination, host, key, origin))
             connection.sendall(wire.encode())
             first = b""
             while b"\r\n" not in first:
@@ -359,6 +475,35 @@ class ServerIsolationTests(unittest.TestCase):
                     headers={"Origin": "http://evil.test"})[0], 403)
         self.assertEqual(
             request(self.one.url + "/dns?name=two.test")[0], 403)
+
+    def test_remote_mode_accepts_same_host_and_rejects_cross_site_origins(self):
+        self.context_two.remote_access = True
+        self.context_two.origins = set()
+        _, headers, _ = request(
+            self.two.url + "/", headers={"Host": "play.example:8080"})
+        csp = headers["Content-Security-Policy"]
+        self.assertIn("ws://play.example:8080", csp)
+        self.assertIn("wss://play.example:8080", csp)
+        self.assertNotIn("two.example", csp)
+
+        status, _, _ = request(
+            self.two.url + "/beta/path",
+            headers={"Host": "play.example:8080",
+                     "Origin": "http://play.example:8080"})
+        self.assertEqual(status, 200)
+        status, _, _ = request(
+            self.two.url + "/beta/path",
+            headers={"Host": "play.example:8080",
+                     "Origin": "http://evil.example:8080"})
+        self.assertEqual(status, 403)
+
+        destination = "127.0.0.1:%d" % self.tcp_port
+        self.assertEqual(self.websocket_status(
+            self.two, destination, "http://play.example:8080",
+            "play.example:8080"), 101)
+        self.assertEqual(self.websocket_status(
+            self.two, destination, "http://evil.example:8080",
+            "play.example:8080"), 403)
 
 
 if __name__ == "__main__":

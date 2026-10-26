@@ -1,0 +1,28 @@
+---
+title: Browser host contract
+description: Emscripten Module interfaces, JSPI/Asyncify, EGL presentation, input, and asynchronous call shapes.
+---
+import { Aside } from '@astrojs/starlight/components';
+import ArchitectureDiagram from '../../../../components/ArchitectureDiagram.astro';
+
+<ArchitectureDiagram type="host" lang="en" />
+
+The mobile client obtains platform services from a plain JavaScript `Module` object. The harness does not reimplement the game; it preserves host ABI shape, timing, and asynchronous semantics.
+
+## Hard `Module.*` constraints
+
+`image.fileSize()` is synchronous, so the snapshot index must load before glue. `image.readAsync()` writes into `Module.HEAPU8`. `socket.connect()` returns an object with `onopen/onclose/onmessage/send` and passes binary WebSocket payloads back to Wasm unchanged.
+
+Ten methods are awaited or chained with `.then()`: `image.readAsync`, `image.cacheAsync`, `dns.resolve`, three `secureStorage` methods, `adProvider.showInterstitial`, `ageSignals.check`, `shop.initialize`, and `shop.inAppPurchase`. Even a stub must return a Promise; being callable is insufficient and crashes mid-connect.
+
+## JSPI and Asyncify
+
+Non-iOS browsers with `WebAssembly.Suspending` select JSPI; others use Asyncify. `instantiateWasm()` patches `imports.env`, prefers `instantiateStreaming()`, then falls back to `arrayBuffer()` when MIME or platform behavior requires it. The module uses no atomics, SIMD, or SharedArrayBuffer, so COOP/COEP isolation is unnecessary.
+
+## EGL and input
+
+`patchEgl()` creates GLES on an OffscreenCanvas. Buffer swap calls `transferToImageBitmap()` and hands it to the visible canvas `bitmaprenderer`, keeping CSS and buffer sizes aligned. Input handles double-tap, touch translation, right-button camera, Pointer Lock virtual cursor, five OSK input types, and audio resume after user gestures.
+
+<Aside type="caution" title="First-frame presentation is not verified rendering">
+Headless SwiftShader subsequently fails default GLES 3.0 vertex shader compilation. Only a real hardware and driver matrix can close this risk.
+</Aside>

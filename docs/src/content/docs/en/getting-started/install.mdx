@@ -1,0 +1,38 @@
+---
+title: Install and first run
+description: Start gwasm from a release zip or source and understand initial downloads, shutdown, and resume behavior.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+## Prerequisites
+
+- Python 3.8 or newer; the runtime needs no `pip install`.
+- Chromium has the most complete coverage. Safari and iOS select the Asyncify build.
+- Keep at least 1 GB free for an on-demand first run, or about 5 GB for `--image`.
+- Network access to the update source and ArenaNet content/game services.
+
+<Steps>
+1. Download a GitHub Release zip and extract it completely. Do not run `gwasm.py` from an archive preview.
+2. Run `python3 gwasm.py` in the extracted directory. Windows users can also double-click the file.
+3. The browser opens `http://127.0.0.1:8080/`; documentation is at same-origin `/docs/`.
+4. Leave the terminal running. After the last launcher-managed page closes, the watchdog shuts down with a delay; reloads and second tabs do not stop it.
+</Steps>
+
+```bash
+python3 gwasm.py
+python3 gwasm.py --image
+python3 gwasm.py --offline --no-update
+```
+
+## What the first run does
+
+The launcher publishes `harness/`, the image index, and fonts, then checks the client version in a background thread. The client files are roughly 8 MB. Range requests then trigger 256 KB chunk downloads; a typical first boot touches hundreds of MB rather than the complete snapshot. `/progress.json` reports the update phase, then `Module.setStartupProgress` takes over module progress.
+
+<Aside type="note" title="Every download is resumable">
+Chunks are named by SHA-256. An interruption leaves only verified content, and the next run skips it. Do not treat `gwpatch-cache/` as a disposable temp directory.
+</Aside>
+
+## Readiness semantics
+
+A listening port only proves the HTTP server started. `done: true` in `/progress.json` means the client and snapshot index are ready. Even after the page says Ready, background prefetch may continue. Authentication and real-GPU limitations still apply.

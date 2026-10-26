@@ -1,0 +1,37 @@
+---
+title: Docker Compose
+description: Build or pull the image, configure an exact Origin, and verify persistence and runtime-image boundaries.
+---
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+The release workflow publishes `linux/amd64` and `linux/arm64` to GHCR. The multi-stage image installs the locked documentation toolchain and builds `docs-dist/` in a Node stage. A Python 3.13 slim runtime copies only runtime code, assets, and static docs, then runs as the non-root `gwasm` user.
+
+<Steps>
+1. Create `.env` with the browser-visible Origin: `GWASM_ORIGIN=http://192.168.1.20:8080`. It cannot contain a path or trailing slash.
+2. Run `docker compose up -d`. Compose maps 8080 on every host interface, so configure the host firewall separately.
+3. Follow `docker compose logs -f gwasm` for `serving`, `relay`, and snapshot state.
+4. Open `http://192.168.1.20:8080/` and confirm `http://192.168.1.20:8080/docs/`.
+</Steps>
+
+```bash
+docker compose pull
+docker compose up -d
+docker compose ps
+docker compose logs --tail=100 gwasm
+```
+
+## Persistent volume
+
+`gwasm-data` mounts at `/data`. `/data/cache` holds content-addressed chunks; `/data/dist` holds the published client and snapshot index. `docker compose down` keeps it, while `down -v` irreversibly removes all downloads. Docs are image-owned, so an image upgrade switches documentation immediately.
+
+## Image acceptance
+
+```bash
+docker run --rm ghcr.io/zhubby/gwasm:latest --help
+docker run --rm --entrypoint sh ghcr.io/zhubby/gwasm:latest \
+  -c 'test -f /app/docs-dist/index.html && ! command -v node && ! command -v npm'
+```
+
+<Aside type="caution" title="The container does not supply a GPU">
+Wasm and WebGL execute in the user's browser. Adding GPU devices to the container neither verifies browser rendering nor fixes the authentication gap.
+</Aside>

@@ -48,13 +48,27 @@ jobs:
           }
           echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.23.4'
+          cache: npm
+
+      - name: Build static documentation
+        run: |
+          npm ci --no-audit --no-fund
+          npm run docs:check
+          npm run docs:build
+          test -f docs-dist/index.html
+          test -f docs-dist/en/index.html
+          test -f docs-dist/pagefind/wasm.en.pagefind
+
       - name: Assemble the package
         run: |
           set -eu
           name="gwasm-${{ steps.v.outputs.tag }}"
           mkdir -p "dist-release/$name"
           cp gwasm.py README.md LICENSE "dist-release/$name/"
-          cp -r gwasm_core harness images fonts "dist-release/$name/"
+          cp -r gwasm_core harness images fonts docs-dist "dist-release/$name/"
           chmod +x "dist-release/$name/gwasm.py"
           (cd dist-release && zip -qr "$name.zip" "$name")
           echo "ZIP=dist-release/$name.zip" >> "$GITHUB_ENV"
@@ -83,6 +97,9 @@ jobs:
           harness/favicon.ico
           images/logo.webp
           fonts/Fremont.woff
+          docs-dist/index.html
+          docs-dist/en/index.html
+          docs-dist/pagefind/wasm.en.pagefind
           LICENSE
           "
           for file in $required_files; do
@@ -91,6 +108,19 @@ jobs:
               exit 1
             }
           done
+
+          python3 gwasm.py --no-browser --offline --no-update \
+            --port 18081 --dir "$work/runtime" --cache "$work/cache" >"$work/server.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            curl --fail --silent http://127.0.0.1:18081/docs/ >/dev/null && break
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:18081/docs/en/ >/dev/null
+          kill "$server_pid" >/dev/null 2>&1 || true
+          wait "$server_pid" 2>/dev/null || true
+          trap - EXIT
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
@@ -136,6 +166,8 @@ jobs:
           done
           docker run --rm --platform linux/amd64 "$IMAGE:$RELEASE_TAG" --help >/dev/null
           docker run --rm --platform linux/arm64 "$IMAGE:$RELEASE_TAG" --help >/dev/null
+          docker run --rm --platform linux/amd64 --entrypoint sh "$IMAGE:$RELEASE_TAG" \
+            -c 'test -f /app/docs-dist/index.html && test ! -w /app/docs-dist/index.html && ! command -v node && ! command -v npm'
 
       - name: Upload package to release
         env:

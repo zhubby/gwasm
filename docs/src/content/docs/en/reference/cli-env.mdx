@@ -1,0 +1,58 @@
+---
+title: CLI and environment variables
+description: gwasm.py arguments, defaults, environment variables, and combination semantics.
+---
+import { Aside } from '@astrojs/starlight/components';
+
+## CLI
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `-d, --dir PATH` | `./dist` | client and published harness; `/data/dist` in container |
+| `-c, --cache PATH` | `./gwpatch-cache` | SHA-256 chunks; `/data/cache` in container |
+| `--bind HOST` | `127.0.0.1` | HTTP/relay listener; defaults to `0.0.0.0` with `--remote` |
+| `-p, --port PORT` | `8080` | port; `0` selects a dynamic test port |
+| `--origin ORIGIN` | localhost Origins | exact allowed browser Origin; repeatable |
+| `--remote` | false | listen on `0.0.0.0`; accept any browser Origin matching the request Host |
+| `-j, --jobs N` | `8` | chunk concurrency in 1..8 |
+| `--build MODE` | `jspi` | `jspi`, `asyncify`, or `both` |
+| `--no-update` | false | skip client version check |
+| `--no-browser` | false | do not launch a browser or tab watchdog |
+| `-v, --verbose` | false | log every HTTP request |
+| `--offline` | false | prohibit missing-chunk network fetches |
+| `--no-prefetch` | false | disable boot working-set prewarming |
+| `-i, --image` | false | download the complete snapshot before launch |
+
+There is no docs CLI argument. The service only discovers a `docs-dist/` with `index.html` beside `gwasm.py`, keeping release and container layout identical.
+
+## Environment
+
+| Name | Default | Purpose |
+| --- | --- | --- |
+| `GWASM_RELAY_DOMAINS` | `arenanetworks.com,guildwars.com` | strict `/dns` suffix allowlist |
+| `GWASM_RELAY_PORTS` | `6112,80,443` | TCP relay destination ports |
+| `GWASM_RELAY_ALLOW_PRIVATE` | unset | `1` permits non-public addresses; tests only |
+| `GWASM_PROXY_ROUTES` | unset | `route=host,...` merges/overrides Web routes |
+| `GWASM_PROXY_TEMPLATE` | unset | upstream template for local fixtures |
+| `GWASM_ORIGIN` | none | Compose interpolation into `--origin`; Python does not read it directly |
+
+<Aside type="danger" title="Environment changes trust boundaries">
+Domains, ports, private-address behavior, and proxy routes can expand capability. Fix, review, and record production values; never accept them from untrusted users.
+</Aside>
+
+## Common combinations
+
+```bash
+python3 gwasm.py --no-browser -p 9000
+
+python3 gwasm.py --image
+python3 gwasm.py --offline --no-update
+
+python3 gwasm.py --no-browser --bind 0.0.0.0 \
+  --origin http://192.168.1.20:8080
+
+# Any remote Host: unauthenticated, so restrict exposure externally
+python3 gwasm.py --remote --no-browser
+```
+
+`--remote` compares normalized `Origin` and request `Host`, including effective ports, rather than opening an arbitrary Origin allowlist. It helps with changing LAN hostnames but authenticates nobody; fixed deployments should prefer explicit `--origin` values.

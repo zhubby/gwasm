@@ -1,0 +1,39 @@
+---
+title: 本机 Python 与源码构建
+description: 使用 release 或源码运行 Python 服务，并构建静态 Starlight 文档。
+---
+import { Aside } from '@astrojs/starlight/components';
+
+## Release 运行
+
+release zip 是终端用户路径，已包含 `docs-dist/`，不需要 Node。完整解压后：
+
+```bash
+python3 gwasm.py --no-browser --bind 127.0.0.1 --port 8080
+```
+
+`gwasm.py` 会在自身相邻发现 `docs-dist/`。如果目录缺失或无 `index.html`，启动日志明确报告 `/docs` unavailable，但游戏继续运行，且加载页不显示 Docs 链接。release 构建会在打包前强制检查该目录，因此缺失只应出现在未构建的源码树。
+
+## 源码构建
+
+文档工具链要求 Node 22.23.4 或更新版本。版本下限来自 Astro 本身，不影响 Python 3.8+ 运行基线。
+
+```bash
+npm ci
+npm run docs:check
+npm run docs:build
+python3 gwasm.py
+```
+
+`astro.config.mjs` 固定 `base: '/docs'`、静态输出、trailing slash 和 `docs-dist/`。`docs:parity` 对比中英文源文件树与图数量，构建后检查内部链接、根页、英文根页和 Pagefind WASM。
+
+## 源码部署约束
+
+- `docs-dist/` 是派生产物，不提交 Git；部署必须先构建。
+- 不要用 `python3 -m http.server` 替代 gwasm Handler，它缺少虚拟快照、relay 和所需安全策略。
+- 生产工作目录可以只读；只有指定的 `--dir` 和 `--cache` 需要写权限。
+- Node 依赖不能复制到 release 或运行镜像。
+
+<Aside type="note" title="动态 Origin 不设置 site">
+文档可能运行在 localhost、LAN IP 或反向代理域名下，所以不硬编码 canonical `site`、分析脚本或第三方资源。所有内部 URL 只基于 `/docs`。
+</Aside>

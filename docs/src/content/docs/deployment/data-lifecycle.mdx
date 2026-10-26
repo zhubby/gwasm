@@ -1,0 +1,37 @@
+---
+title: 数据、备份与回滚
+description: 区分可再生数据与版本制品，执行备份、恢复、升级和回滚。
+---
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+## 数据分类
+
+| 路径 | 性质 | 备份优先级 |
+| --- | --- | --- |
+| `gwpatch-cache/` 或 `/data/cache` | SHA-256 内容块，可从 CDN 重建 | 高：节省 4.2 GB 重下时间 |
+| `dist/` 或 `/data/dist` | 客户端、snapshot index、boot 工作集 | 中：可重建，但索引应与缓存一致 |
+| `docs-dist/` 或 `/app/docs-dist` | 版本化静态制品 | 不备份：由 release/镜像恢复 |
+| `.env`、代理配置 | 部署机密与边界 | 高：单独加密、最小权限 |
+
+项目当前不持久保存账号凭据；若备份中出现密码、token 或未知 `.key`，应视为异常并停止传播。
+
+## 一致备份
+
+<Steps>
+1. 停止服务，或至少等待无下载写入；chunk 文件是原子写，但 index 和工作集记录可能变化。
+2. 同时备份 cache 与 dist；容器可对 `gwasm-data` 卷做文件级 snapshot。
+3. 保存 release tag 或镜像 digest，不要只记录 `latest`。
+4. 对备份运行 hash/归档校验，并在隔离目录做一次恢复演练。
+</Steps>
+
+## 升级
+
+Release 模式：解压新版本到新目录，把旧 `gwpatch-cache/` 与必要的 `dist/` 数据复制或指向新目录，启动并验收后再保留/移除旧目录。容器模式：拉取确定 tag/digest，`docker compose up -d` 替换容器但复用 `/data` 卷。文档随新制品更新，不从卷恢复。
+
+## 回滚
+
+回滚程序必须同时恢复旧运行代码与其 `docs-dist/`；缓存 hash 可跨版本复用，但 snapshot index 由目标版本重新检查。容器回滚只改镜像 tag/digest，不回滚卷，除非升级期间确认产生了不兼容元数据。
+
+<Aside type="caution" title="删除卷不是回滚">
+`docker compose down -v` 会永久删除缓存和客户端数据，只能从上游重新下载。它是灾难性重置，不是正常升级步骤。
+</Aside>

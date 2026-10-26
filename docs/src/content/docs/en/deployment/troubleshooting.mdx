@@ -1,0 +1,42 @@
+---
+title: Troubleshooting and acceptance
+description: Diagnose launcher, data, network, browser, and documentation failures by layer, then run release acceptance.
+---
+import { Aside } from '@astrojs/starlight/components';
+
+## Diagnose by layer
+
+### Process does not start
+
+Run `python3 gwasm.py --help`. Python must be 3.8+, and releases must be fully extracted with `gwasm_core/` and `harness/`. For `Address already in use`, choose `-p 9000` or stop the owner.
+
+### Page waits or update fails
+
+Read the terminal and `/progress.json`, not only browser console. Restarting reuses verified chunks. For disk exhaustion, use on-demand mode or free at least 5 GB. Do not edit manifests after a hash failure; remove the named hash file and retry.
+
+### Snapshot read fails
+
+Confirm `snapshot-chunks.json` points to the real cache and requests contain one Range. Offline missing chunks return `503`; full GET of a virtual snapshot intentionally returns `416`.
+
+### Network connect fails
+
+`DENY` identifies Origin, domain, port, or address policy. `connect FAILED` means policy passed but egress failed. A reverse proxy must forward WebSocket Upgrade and preserve browser Origin. Do not enable private targets to mask DNS or routing errors.
+
+### Docs are 404 or unstyled
+
+In source, run `npm run docs:build`. Confirm `/docs` permanently redirects to `/docs/`, assets begin `/docs/_astro/`, and Pagefind Wasm is `application/wasm`. Unknown `/docs/*` must be 404 rather than a Web proxy 502.
+
+## Release acceptance checklist
+
+- [ ] `/`, `/progress.json`, and `/ping` preserve behavior; game CSP gains no inline exceptions.
+- [ ] `/docs` redirects to `/docs/`; both home pages and deep pages return 200.
+- [ ] `/docs/_astro/*` is immutable; HTML, Pagefind, and other resources revalidate.
+- [ ] HEAD and single Range work; encoded traversal is rejected/404.
+- [ ] Locale, theme, bilingual search, keyboard focus, and mobile layout work without horizontal overflow.
+- [ ] Relay rejects bad Origins, private IPs, and non-allowlisted ports.
+- [ ] Release zip and AMD64/ARM64 images contain `docs-dist/`; runtime images contain no Node/npm, game Wasm, APK, or key. Only the Wasm required by Pagefind search remains.
+- [ ] Status still says auth absent, real GPU unverified, and public multi-user unsupported.
+
+<Aside type="note" title="Rollback triggers">
+Docs CSP failure, broken Pagefind, widened relay policy, Range regression, or missing release docs must block publication. A game home page that still opens is not sufficient evidence to proceed.
+</Aside>

@@ -1,0 +1,27 @@
+---
+title: 文档维护
+description: 在 Astro Starlight 中维护双语页面、架构图、链接、搜索与可访问性。
+---
+import { Aside } from '@astrojs/starlight/components';
+
+Starlight 内容位于 `docs/src/content/docs/`。中文使用根路径，英文在 `en/` 下保持完全相同的相对文件树。新增、重命名或删除页面必须同一次变更处理两种语言，并更新 `astro.config.mjs` 的双语 sidebar。
+
+## 写作约束
+
+- 中文术语首次出现时给出英文名，例如“内容寻址缓存（content-addressed cache）”；之后优先自然中文。
+- 英文按英语技术写作重构，不逐句对照翻译；事实、限制、表格字段和页面层级必须对应。
+- 把陈述分为已验证、未验证、不支持。计划和猜测不能使用完成时。
+- 页面 title/description 必填；标题层级从 `##` 开始，链接使用站内相对路径。
+- `docs/host-contract.json` 是契约唯一来源；页面通过 `HostContract.astro` 渲染，禁止复制 JSON 列表。
+
+## 架构图
+
+七类图由 `ArchitectureDiagram.astro` 生成纯 HTML/CSS，包含 caption、文本节点与阅读说明，不依赖 Mermaid 或客户端 JavaScript。新增标签时同时补中英文。图只是摘要，正文必须解释箭头、失败路径和边界。
+
+## 验证
+
+`npm run docs:parity` 检查页面树、frontmatter 与架构图类型/顺序；`docs:check` 做 Astro 类型检查；`docs:build` 生成 Pagefind、验证内部资源与 `/docs` base。浏览器验证需覆盖桌面/移动、两种语言、两种主题、搜索、键盘 focus、无横向溢出与无 console/CSP 错误。
+
+<Aside type="note" title="静态输出仍有生命周期行为">
+`docs/public/docs-heartbeat.js` 复用 `/ping` 和 `pagehide` 协议。它是独立外部脚本，便于文档 CSP 保持可解释；不要在 MDX 中加入第三方脚本或 analytics。
+</Aside>

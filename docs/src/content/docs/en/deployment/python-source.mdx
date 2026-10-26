@@ -1,0 +1,39 @@
+---
+title: Bare Python and source builds
+description: Run the Python service from a release or source and build static Starlight documentation.
+---
+import { Aside } from '@astrojs/starlight/components';
+
+## Release runtime
+
+The release zip is the end-user path. It already includes `docs-dist/` and needs no Node. After complete extraction:
+
+```bash
+python3 gwasm.py --no-browser --bind 127.0.0.1 --port 8080
+```
+
+`gwasm.py` discovers `docs-dist/` beside itself. If the directory or `index.html` is missing, startup clearly reports `/docs` unavailable while the game continues, and the loading page omits its Docs link. Release packaging requires the directory, so absence should only affect an unbuilt source checkout.
+
+## Source build
+
+Documentation requires Node 22.23.4 or newer. That minimum comes from Astro and does not change the Python 3.8+ runtime baseline.
+
+```bash
+npm ci
+npm run docs:check
+npm run docs:build
+python3 gwasm.py
+```
+
+`astro.config.mjs` fixes `base: '/docs'`, static output, trailing slashes, and `docs-dist/`. `docs:parity` compares Chinese and English source trees and diagram counts. Post-build checks cover internal links, both locale roots, and Pagefind Wasm.
+
+## Source deployment constraints
+
+- `docs-dist/` is generated and ignored by Git; build before deployment.
+- Do not substitute `python3 -m http.server`; it lacks virtual snapshot delivery, relay, and required policies.
+- The application directory may be read-only. Only configured `--dir` and `--cache` need writes.
+- Node dependencies must not enter releases or runtime images.
+
+<Aside type="note" title="No fixed site for a dynamic Origin">
+Docs may run on localhost, a LAN address, or a reverse-proxy domain. They intentionally set no canonical `site`, analytics, or third-party scripts. Internal URLs are rooted only at `/docs`.
+</Aside>

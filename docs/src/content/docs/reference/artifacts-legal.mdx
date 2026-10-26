@@ -1,0 +1,24 @@
+---
+title: 制品与法律声明
+description: Release 与容器内容边界、第三方资产归属、许可证和合理使用约束。
+---
+
+## 发行制品
+
+release zip 包含 Python 运行时、`gwasm_core/`、浏览器 harness、图片、字体、精简 README、GPL-3.0 LICENSE 与构建后的 `docs-dist/`。GHCR runtime 镜像包含同等运行内容，但不包含 Node/npm、Astro 源码依赖、测试或工具。
+
+以下内容绝不属于发行制品：APK、Guild Wars 客户端 Wasm、官方 JS glue、4.2 GB snapshot、manifest、chunk cache、用户数据、密码、token 或提取的 key。它们由用户运行时从许可来源获取或在本地派生。`docs-dist/pagefind/` 中只保留文档搜索所需的 Pagefind Wasm，不是游戏二进制。
+
+## 法律与商标
+
+本项目是独立爱好者互操作研究，**与 ArenaNet 或 NCSoft 无关联，也未获得其认可**。
+
+Guild Wars 及所有相关游戏内容 © 2005–2026 ArenaNet, Inc.，保留所有权利。NCsoft、interlocking NC logo、ArenaNet、Arena.net、Guild Wars 及相关标志与设计为 NCsoft Corporation 的商标或注册商标；其他商标归各自所有者。
+
+加载画面摄影由 [Snapshot Henchman](https://bloogum.net/guildwars/) 提供。仓库中的 Guild Wars logo、截图和 favicon 供离线加载界面使用。`fonts/Fremont.woff` 为 SoftMaker Software GmbH 版权所有，Fremont 名称为其商标；它不是 ArenaNet 资产。
+
+## 软件许可证与行为约束
+
+项目代码采用 GPL-3.0，保持与 `gwlauncher`、`gMod` 一致。copyleft 是有意选择：从客户端恢复的互操作知识应在衍生项目中继续开放。许可证不授予游戏内容、商标、字体或账号的权利。
+
+所有安装共享客户端 access key 并访问真实生产 CDN。并发上限 8、诚实 User-Agent 和指数退避是对远端服务的保护。不要提高压力、自动化账号流量或把研究环境包装为公共游戏服务。

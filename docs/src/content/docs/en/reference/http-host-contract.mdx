@@ -1,0 +1,34 @@
+---
+title: HTTP and host contract
+description: Static, Range, lifecycle, DNS, proxy, relay endpoints and the machine-readable Module contract.
+---
+import { Aside } from '@astrojs/starlight/components';
+import HostContract from '../../../../components/HostContract.astro';
+
+## HTTP endpoints
+
+| Path | Method | Response and constraint |
+| --- | --- | --- |
+| `/` and static files | GET/HEAD | harness/client, single Range, game CSP |
+| `/docs` | GET/HEAD | permanent `308` redirect to `/docs/` |
+| `/docs/*` | GET/HEAD | read-only `docs-dist/`, separate CSP, missing is 404 |
+| `/progress.json` | GET | update/download/prefetch state; `no-store` |
+| `/ping?id=…[&bye=1]` | GET/POST | `204`, updates watchdog tab identity |
+| `/dns?name=…` | GET | IPv4 text for allowed domains; explicit 403/502 |
+| `/Gw.snapshot` | GET + Range | ChunkStore assembly; 416 without Range, 503 if missing |
+| `/?dest=IP:PORT` | WebSocket | same-origin TCP relay with Origin/address/port checks |
+| `/{route}/…` | HTTP verbs | HTTPS proxy for known routes; unknown is 502 |
+
+The docs namespace terminates before proxy dispatch. Every `/docs/...` resolves to a static artifact, redirect, or 404. Plain and percent-encoded `..`, backslashes, and directory escapes cannot leave `docs_root`.
+
+## Cache and response headers
+
+`/docs/_astro/*` uses `public, max-age=31536000, immutable` because names carry content hashes. HTML, Pagefind index/Wasm, and other docs resources use `no-cache`, allowing storage with revalidation. Every response has `nosniff` and `no-referrer`; Pagefind's `wasm.*.pagefind` payload uses `application/wasm`.
+
+<Aside type="note" title="HEAD and Range">
+HEAD returns GET-equivalent status and headers without a body. Static docs resources support one Range for tests and proxy compatibility; multipart Range is unsupported.
+</Aside>
+
+<HostContract lang="en" />
+
+The JSON promiseReturning list includes dynamic platform stubs beyond required entries. Re-derive the contract from glue `await` and `.then()` sites before changing implementation and tests. Never update only this page.

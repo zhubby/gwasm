@@ -1,0 +1,34 @@
+---
+title: Startup and update
+description: The complete sequence from CLI validation and background updates to the first Wasm frame.
+---
+import { Aside } from '@astrojs/starlight/components';
+import ArchitectureDiagram from '../../../../components/ArchitectureDiagram.astro';
+
+<ArchitectureDiagram type="startup" lang="en" />
+
+## 1. Synchronous launcher phase
+
+`gwasm.py` checks Python and required release files, validates Origins and concurrency, then creates the distribution and cache directories. `publish()` copies the harness and font; `copy_art()` generates an index containing only local image names and attribution. The server then binds and calculates its actual Origin.
+
+ServerContext is the state boundary for one server instance. Progress, ChunkStore, relay policy, Origins, HTTP client, and watchdog are not module globals, which lets tests run instances with different policies concurrently.
+
+## 2. Background update phase
+
+HTTP begins serving before the updater thread finishes, and the loading page reads `/progress.json` for phase, throughput, and ETA. If updating fails:
+
+- an existing client in `dist/` remains usable;
+- no existing client produces an explicit error state;
+- offline mode without a snapshot index cannot construct the virtual snapshot and never claims readiness.
+
+## 3. Browser boot phase
+
+`harness-boot.js` waits for the update, then reads `snapshot-chunks.json` so synchronous `image.fileSize()` works before glue execution. It selects JSPI or Asyncify, installs `instantiateWasm()` and `locateFile()`, and finally loads the official glue.
+
+<Aside type="caution" title="Script order is part of the ABI">
+Foundation, cache, Module, input, and boot are ordered classic scripts. `Module` must be a top-level `var`; converting it to ESM, `const`, or unordered async loading can make glue create a separate empty object.
+</Aside>
+
+## 4. Lifecycle and heartbeat
+
+Game and docs pages send a tab identity to `/ping`. `pagehide` sends `bye=1`, followed by a grace period that tolerates reloads. A 150-second idle allowance covers background timer throttling. The watchdog only runs when the launcher opens a browser; a `--no-browser` service does not stop merely because nobody views docs.

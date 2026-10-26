@@ -1,0 +1,34 @@
+---
+title: System overview
+description: Process, trust, data-plane, and control-plane boundaries in gwasm.
+---
+import { Aside } from '@astrojs/starlight/components';
+import ArchitectureDiagram from '../../../../components/ArchitectureDiagram.astro';
+
+gwasm splits responsibilities that originally lived in a Capacitor WebView and native mobile shell into a browser host and a local Python service. The browser runs the unrewritten Emscripten glue and Wasm. Python owns persistent caching, TCP connections, DNS compatibility, and upstream HTTPS forwarding that the browser cannot or should not perform directly.
+
+<ArchitectureDiagram type="context" lang="en" />
+
+Arrows show the primary request direction, not every callback. Browser and Python stay same-origin: static assets, `/progress.json`, `/dns`, Range, proxy, and WebSocket relay share one Origin and require no CORS. Domain, port, address-class, and explicit route checks constrain the Python-to-upstream boundary.
+
+## Processes and ownership
+
+| Area | Owns | Explicitly does not own |
+| --- | --- | --- |
+| `gwasm.py` | CLI, lifecycle, publish directory, ServerContext | browser UI state, account credentials |
+| `gwasm_core` | HTTP, manifest/chunks, Range, DNS/proxy/relay | third-party packages, Node runtime |
+| `harness/` | `Module.*`, cache, input, EGL presentation, loading state | raw TCP, filesystem paths |
+| Wasm client | game logic, rendering calls, protocol state | browser platform implementations |
+| `docs-dist/` | versioned static documentation | `/data` persistence, runtime writes |
+
+## Two planes
+
+The **control plane** selects versions, parses manifests, verifies hashes, reports progress, and enforces Origin and policy. The **data plane** turns arbitrary Wasm offset/length reads into 256 KB content chunks. It spans browser memory, Cache API, Python disk, and CDN, with the same content hash identifying data at every layer.
+
+<Aside type="note" title="Documentation is not another production service">
+Astro and Starlight run only at build time. The same Python handler serves read-only `docs-dist/` under `/docs/*`; the runtime image contains no Node or npm.
+</Aside>
+
+## Failure isolation
+
+Missing docs do not block the game. A client update failure may use an existing client, and prefetch failure does not block demand reads. Hash mismatch, a missing snapshot index, invalid Range, an untrusted Origin, or a private relay target fail explicitly because proceeding would violate integrity or security boundaries.

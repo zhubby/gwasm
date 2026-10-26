@@ -1,0 +1,29 @@
+---
+title: Wasm 分析工具链
+description: 从二进制解码、引用定位到符号恢复、表扩展和静态 detour。
+---
+import { Aside } from '@astrojs/starlight/components';
+
+`tools/` 直接分析 Wasm 模块字节；运行时线性内存不包含 code section，因此“让模块扫描自己的代码”在模型上不可行。所有派生二进制写入被忽略的 `build/`，仓库不提交客户端 Wasm。
+
+## 工具与顺序
+
+```bash
+python3 tools/wasmscan.py dist/Gw.jspi.wasm '!s_context'
+python3 tools/wasmpatch.py dist/Gw.jspi.wasm build/patched.wasm
+python3 tools/wasmdetour.py build/patched.wasm build/shared.wasm --all
+python3 tools/gensyms.py dist/Gw.jspi.wasm build/
+```
+
+1. `wasmscan.py` 解码全部指令、imports/functions/data/table，按字符串、断言和地址引用定位函数。
+2. `wasmpatch.py` 把全部约 17.6k 函数追加到间接表，并留出增长空间；原始表只包含 address-taken 函数且 `min == max`。
+3. `wasmdetour.py` 把原函数体移动到 `gwca_orig_<f>`，原位置改为读取 hook table 的 dispatcher，从而拦截 direct call。
+4. `gensyms.py` 从 import/export 和约 850 个源路径恢复 name section，并输出字符串 xref CSV 与 Ghidra importer。
+
+<Aside type="caution" title="必须解码 LEB128">
+LLVM relocation 常使用定宽、零填充的非 canonical 编码。例如同一个 `i32.const` 不一定等于最短字节序列。按字节搜索常量会得到看似可信的零结果；扫描器必须先解码指令。
+</Aside>
+
+## 可验证范围
+
+解码器会报告无法覆盖的函数，而不是静默跳过；patcher 只追加结构，避免导入新符号导致全部 defined function index 重排。工具可以证明二进制布局与变换结果，不能证明 hook 业务语义、账号协议或真实渲染正确。

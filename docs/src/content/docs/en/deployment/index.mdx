@@ -1,0 +1,32 @@
+---
+title: Topology and prerequisites
+description: Choose a release, bare Python, Docker, or source build while understanding Origin, network, and persistence boundaries.
+---
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+import ArchitectureDiagram from '../../../../components/ArchitectureDiagram.astro';
+
+<ArchitectureDiagram type="release" lang="en" />
+
+Deployment gives one trusted user's browser same-origin access to the client, snapshot, and relay. Astro only produces static docs. Release zips carry `docs-dist/`; containers build it in a Node stage, while the final image still runs only Python.
+
+<CardGrid>
+  <Card title="Release zip">Fewest dependencies, intended for a local desktop. Extract and run `python3 gwasm.py`; docs and game share an origin.</Card>
+  <Card title="Docker Compose">For a fixed host and private LAN. `/data` keeps client/chunks, while image-owned `/app/docs-dist` changes with each version.</Card>
+  <Card title="Source build">Contributor path. Node 22.23.4+ builds docs, but the Python runtime remains dependency-free.</Card>
+</CardGrid>
+
+## Prerequisites
+
+1. Determine the exact browser-visible Origin, including scheme, host, and port. Container mode passes it through `GWASM_ORIGIN`.
+2. Restrict the firewall to intended devices. A public edge requires separate authentication, but shared multi-user operation remains unsupported.
+3. Permit outbound DNS, HTTPS, and TCP 6112/80/443 to allowed ArenaNet/Guild Wars services.
+4. Keep at least 1 GB for demand mode. A complete snapshot is about 4.2 GB; reserve 5 GB plus backup and inode headroom.
+5. TLS termination must preserve Host/Origin expectations and support WebSocket Upgrade and Range.
+
+<Aside type="danger" title="A reverse proxy is not the security model">
+It can terminate TLS, restrict source addresses, and add perimeter authentication. The Python relay remains a constrained open proxy for one trust domain. Do not share an instance between mutually untrusted users.
+</Aside>
+
+## Data locations
+
+A release writes `dist/` and `gwpatch-cache/` beside `gwasm.py` by default. Containers use `/data/dist` and `/data/cache`. Documentation always stays in read-only `/app/docs-dist`; putting it in `/data` would let an old volume mask docs from a new image.

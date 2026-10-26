@@ -1,0 +1,40 @@
+---
+title: Configuration and runtime modes
+description: Choose JSPI or Asyncify, on-demand or preload, offline behavior, and network exposure.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## Client builds
+
+| Mode | Selection | Scope |
+| --- | --- | --- |
+| JSPI | default `--build jspi` | non-iOS browsers with `WebAssembly.Suspending`; smaller client |
+| Asyncify | `--build asyncify` | Safari, iOS, or browsers without JSPI; about 27.8 MB |
+| Both | `--build both` | one service for mixed browsers; the host selects by capability |
+
+Both glue builds request a file named `Gw.wasm`. Host `locateFile()` must redirect JSPI to `Gw.jspi.wasm`; otherwise a directory containing both builds can silently pair the wrong binary.
+
+## Data modes
+
+- Default on-demand: fetch only chunks touched by startup and the active scene, while prewarming the recorded boot set.
+- `--image`: fetch the complete snapshot before launching; resumable, with about 5 GB free space recommended.
+- `--no-prefetch`: keep on-demand reads but skip `boot-chunks.json` prewarming.
+- `--offline`: prohibit network fetches; a missing chunk returns `503` rather than silently going online.
+- `--no-update`: skip the version check. This is not full offline mode; missing snapshot chunks may still come from the CDN.
+
+## Bind address and Origin
+
+The default listener is `127.0.0.1:8080`. `--bind 0.0.0.0` widens reachability; repeat a complete `--origin http://host:port` for every browser origin allowed. Paths, wildcards, credentials, and omitted ports are rejected. `--remote` binds all interfaces by default and accepts Origins matching each request Host. It helps on a trusted LAN with changing addresses but adds no authentication.
+
+`--remote` is the explicit unrestricted remote mode. It listens on `0.0.0.0` by default and does not require IP addresses or hostnames to be enumerated, but every browser Origin used by WebSocket or proxy requests must still match that request's `Host` by hostname and effective port. An explicit `--bind` overrides the listener, and `--origin` may still add fixed Origins.
+
+```bash
+python3 gwasm.py --remote --no-browser
+```
+
+<Aside type="danger" title="Remote reachability is not a public service">
+`--remote` adds no user authentication, session isolation, rate limiting, or TLS termination. Anyone able to reach the port can read client/cache content and call the constrained relay/proxy. A reverse proxy can add TLS and perimeter access control, but cannot turn the relay into a multi-tenant service.
+</Aside>
+
+Environment variables configure relay and Web API mapping. See the complete [CLI and environment reference](../../reference/cli-env/).

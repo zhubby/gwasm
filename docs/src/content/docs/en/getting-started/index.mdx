@@ -1,0 +1,31 @@
+---
+title: Status and limitations
+description: Understand what gwasm verifies, what remains unverified, and which deployment models are unsupported.
+---
+
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+
+gwasm is an interoperability research project. It supplies a browser host for the Guild Wars WebAssembly client and a Python-standard-library service for updates, the 4.2 GB snapshot, and game networking. It is neither a complete game distribution nor a way around account or content ownership.
+
+<CardGrid>
+  <Card title="Verified">Client updates, manifest/chunk verification, snapshot Range delivery, the base `Module.*` contract, DNS, HTTPS proxying, WebSocket-to-TCP relay, and offline fixture tests.</Card>
+  <Card title="Unverified">Final output on a real GPU. Headless Chromium records `first frame presented`, then SwiftShader fails GLES 3.0 shader compilation.</Card>
+  <Card title="Unsupported">Public or untrusted multi-user hosting. There is no authentication, and the constrained relay is not a tenant-isolated gateway.</Card>
+</CardGrid>
+
+<Aside type="caution" title="Authentication is not implemented">
+`login` and `nativeAccount` remain stubs. Browser `secureStorage` is volatile page memory. Do not enter real account credentials, and do not interpret reaching an authentication endpoint as a secure login path.
+</Aside>
+
+## What it can do
+
+- Start the browser host locally from a release zip; fetch the roughly 8 MB client, then stream game data on demand.
+- Pre-cache the complete, roughly 4.2 GB snapshot with `--image`, resuming by content hash after interruption.
+- Run under Docker Compose for one trusted host or a small private LAN.
+- Analyze client Wasm offline: scanning, symbol recovery, table expansion, and static detours.
+
+## Why the boundaries matter
+
+The page can reach same-origin `/dns`, the HTTPS proxy, and the WebSocket relay. Loopback binding, exact Origins, domain suffixes, a port allowlist, and public-unicast address checks form one boundary. Treat every relaxation as a security change. CDN access uses a shared access key, so concurrency is deliberately capped at eight and has no supported bypass.
+
+Continue with [install and first run](./install/). Before deployment, read [topology and prerequisites](../../deployment/).

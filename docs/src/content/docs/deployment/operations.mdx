@@ -1,0 +1,39 @@
+---
+title: 运行、安全与就绪
+description: 日志、健康信号、离线运行、反向代理和部署安全加固。
+---
+import { Aside } from '@astrojs/starlight/components';
+
+## 日志与就绪判断
+
+启动日志至少应出现服务目录/URL、bind + relay Origins、允许域名/端口，以及文档 available/unavailable。`-v` 会记录每个 HTTP 请求，正常运行可能产生数千行，只在诊断时开启。
+
+| 信号 | 健康含义 | 失败含义 |
+| --- | --- | --- |
+| `GET /` 返回 200 | harness 已发布 | 运行目录/权限错误 |
+| `/progress.json` 的 `done: true` | 客户端与索引就绪 | `error` 包含更新原因 |
+| `GET /docs/` 返回 200 | 当前制品包含文档 | 源码未构建或制品损坏 |
+| Range 返回 206 | 静态/快照范围服务工作 | 416 表示请求或索引问题 |
+| relay `open` + 双向字节 | TCP 建立并有数据 | DENY/connect FAILED 指向策略或出口 |
+
+Compose healthcheck 只读取 `/` 的一个字节，因此是 liveness，不是完整 readiness。自动化发布应额外检查 `/docs/`、`/progress.json` 和 Range。
+
+## 离线模式
+
+只有完整客户端、snapshot index 和所有将访问的 chunk 都在磁盘时，`--offline --no-update` 才能工作。最可靠流程是联网执行一次 `--image`，停止服务并备份 cache/dist，再在隔离环境启动。缺失 chunk 返回 `503` 是预期保护。
+
+## 安全加固
+
+- 维持非 root 用户和只读应用目录；只给 cache/dist 写权限。
+- 防火墙限制入站，egress 仅开放必要 DNS/HTTPS/TCP；不要允许云 metadata 地址。
+- 不启用 `GWASM_RELAY_ALLOW_PRIVATE=1`；最小化 relay domains/ports 与 proxy routes。
+- TLS 反代设置请求体上限、空闲超时、WebSocket Upgrade 和 Range；避免缓存 `/ping`、`/progress.json` 或 proxy 响应。
+- 不在日志中记录请求体、Cookie、Authorization 或未来账号凭据。
+
+<Aside type="danger" title="公网暴露仍然不受支持">
+即使反代增加 Basic Auth，多个用户仍共享进程、缓存、relay policy 和上游 access key。当前实现没有租户资源配额、审计或凭据隔离。
+</Aside>
+
+## 文档与游戏 CSP
+
+游戏页面保持不允许 inline script/style 的严格 CSP，并允许配置的 WebSocket Origins。`/docs` 使用独立 CSP，只放行同源、Starlight 必需的 inline 初始化/style 以及同源 Pagefind WASM；两者不能合并为一个更宽策略。

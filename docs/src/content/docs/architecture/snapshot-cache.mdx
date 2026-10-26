@@ -1,0 +1,31 @@
+---
+title: 快照与双层缓存
+description: 4.2 GB 虚拟快照如何跨浏览器、Python 和 CDN 完成低放大随机读取。
+---
+import { Aside } from '@astrojs/starlight/components';
+import ArchitectureDiagram from '../../../components/ArchitectureDiagram.astro';
+
+<ArchitectureDiagram type="cache" lang="zh" />
+
+Wasm 看到一个普通的大文件接口，实际数据从未要求以完整文件存在。一次 `image.readAsync(offset, length)` 可以跨越任意 chunk；每层只读取覆盖区间并在边界处切片。
+
+## Python：内容寻址与锁
+
+`ChunkStore.read()` 计算首尾 chunk，按顺序读取或获取缺失内容，再拼接目标字节。锁以 hash 为键：不同 chunk 可以并行，同一未缓存 chunk 即使被六个 reader 同时请求也只下载一次。访问过的索引合并写入 `boot-chunks.json`，避免一次中断启动缩小已知工作集。
+
+## 浏览器：内存与持久层
+
+- 256 MiB 内存 LRU 提供当前页面最快路径；
+- Cache API 以内容 hash 为 URL 的一部分，跨 reload 复用且不会把旧版本误配到新快照；
+- `inflight` Map 让重叠 read/cache 调用共享一个 Promise；
+- `storedHashes` 只在 Cache API 写入成功后更新，失败时撤销乐观记录。
+
+未做 Promise 去重时曾测得 3,557 个请求只覆盖 886 个不同 chunk，传输 932 MB 才交付 227 MB。去重是正确性与外部负载约束，不只是性能微调。
+
+<Aside type="caution" title="浏览器持久缓存命中仍未充分验证">
+已有观测显示约 360 MB 附近可能触发配额或 persistence 拒绝，跨 reload 命中偏低。当前文档将其标为风险，不宣称浏览器层可替代 Python 磁盘缓存。
+</Aside>
+
+## Range 语义
+
+`Gw.snapshot` 的虚拟版本只接受单段 `bytes=start-end` 或 suffix Range；完整 GET 返回 `416`，防止意外拼接整个 4.2 GB 对象。普通静态文件同样支持单段 Range。越界、反向和多段 Range 显式拒绝。

@@ -1,0 +1,37 @@
+---
+title: Data, backup, and rollback
+description: Separate reproducible data from versioned artifacts and perform backup, restore, upgrade, and rollback.
+---
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+## Data classes
+
+| Path | Nature | Backup priority |
+| --- | --- | --- |
+| `gwpatch-cache/` or `/data/cache` | SHA-256 chunks, rebuildable from CDN | high: avoids downloading 4.2 GB again |
+| `dist/` or `/data/dist` | client, snapshot index, boot working set | medium: rebuildable, but index should match cache |
+| `docs-dist/` or `/app/docs-dist` | versioned static artifact | none: restore from release/image |
+| `.env`, proxy config | deployment secrets and boundaries | high: separately encrypted, least privilege |
+
+The project does not persist account credentials. A password, token, or unknown `.key` in a backup is anomalous; stop distributing it.
+
+## Consistent backup
+
+<Steps>
+1. Stop the service, or at least wait for writes to finish. Chunk writes are atomic, but indexes and working-set records can change.
+2. Back up cache and dist together. Containers can snapshot the `gwasm-data` volume at file level.
+3. Record the release tag or image digest, not just `latest`.
+4. Verify archive hashes and perform one restore drill in an isolated directory.
+</Steps>
+
+## Upgrade
+
+For releases, extract into a new directory, reuse or copy old cache and necessary dist state, start and accept the new version, then retain or remove the old directory. For containers, pull a fixed tag/digest and let `docker compose up -d` replace the container while reusing `/data`. Docs come from the new artifact, never the volume.
+
+## Rollback
+
+Restore old runtime code together with its `docs-dist/`. Content hashes may be reused across versions, while the target version rechecks its snapshot index. Container rollback changes only the image tag/digest unless the upgrade demonstrably wrote incompatible metadata.
+
+<Aside type="caution" title="Deleting a volume is not rollback">
+`docker compose down -v` permanently removes cached client data, forcing an upstream download. It is a destructive reset, not a normal upgrade step.
+</Aside>
