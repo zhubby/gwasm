@@ -6,6 +6,11 @@ the running code, and every question about them can be answered offline.
 
 Outputs land in `build/` and are gitignored — they are derived game binaries.
 
+The root-level `gwpatch.py` and `getsnapshot.py` are download tools rather
+than wasm analyzers. They share the standard-library manifest, HTTP, hash and
+chunk implementation in `gwasm_core/`; neither requires `requests` or any
+other installed package.
+
 ## Two facts that bite
 
 **Constants use non-canonical, zero-padded LEB128.** `i32.const 0x102820`
@@ -76,3 +81,13 @@ are separate address spaces, so nothing marks a constant as a pointer.
     python3 tools/wasmpatch.py  dist/Gw.jspi.wasm build/patched.wasm
     python3 tools/wasmdetour.py build/patched.wasm build/shared.wasm --all
     python3 tools/gensyms.py    dist/Gw.jspi.wasm build/
+
+## Tests
+
+The analyzer scripts remain standalone. Shared download/cache behavior is
+covered by the repository test discovery command:
+
+    python3 -m unittest discover -s tests -p 'test_*.py'
+
+Browser host and release-policy checks are documented in
+`docs/internals.md`.

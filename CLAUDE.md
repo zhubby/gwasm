@@ -37,8 +37,9 @@ real hardware are the single most useful contribution right now.
 
 | | |
 |---|---|
-| `gwasm.py` | everything at runtime: update, serve, relay, prefetch, browser |
-| `harness/` | `index.html` + `harness.{css,js}` + `loading.{css,js}` |
+| `gwasm.py` | lightweight CLI, install checks and process lifecycle |
+| `gwasm_core/` | shared stdlib HTTP, patch/cache, runtime and server modules |
+| `harness/` | ordered classic scripts for foundation, cache, Module, input and boot |
 | `images/`, `fonts/` | loading-screen art and typeface |
 | `gwkey.py` | extracts the client access key from an APK |
 | `gwpatch.py` | the patch protocol, standalone |
@@ -47,7 +48,7 @@ real hardware are the single most useful contribution right now.
 
 ## Style
 
-Applies to `gwasm.py` and the JS in `harness/`.
+Applies to `gwasm.py`, `gwasm_core/` and the JS in `harness/`.
 
 - **Single-line comments.** No block comments. A point that needs a paragraph
   belongs in `docs/internals.md`, not above the code.
@@ -105,7 +106,7 @@ both files are present.
 The module drives `cacheAsync` over overlapping regions with ~160 requests in
 flight. Without one shared promise per chunk it fetches the same chunk several
 times over — measured at 4x amplification, enough that a boot never finished.
-See `chunkBytes()` in `harness/harness.js`.
+See `chunkBytes()` in `harness/harness-cache.js`.
 
 ### Snapshot reads are latency-bound, not bandwidth-bound
 
@@ -142,13 +143,14 @@ It ignores `Range` and does not know `application/wasm`. Both are fatal.
 
 ## Zero dependencies is a feature
 
-`gwasm.py` is stdlib-only: no `pip install`, no Node. This is not minimalism for
+`gwasm.py` and its adjacent `gwasm_core/` package are stdlib-only: no
+`pip install`, no Node. This is not minimalism for
 its own sake. On Debian, Ubuntu and Fedora system Pythons, PEP 668 makes `pip
 install` fail outright with `externally-managed-environment` — which would hit
 exactly the non-technical user who downloaded a zip and double-clicked it. The
 release workflow asserts this by importing `gwasm` on a clean interpreter.
 
-Node is required only to run two of the four test suites.
+Node is required only for the host contract and browser E2E suites.
 
 ## What is committed that arguably should not be
 
@@ -176,10 +178,10 @@ None of these is a precedent for committing anything else.
 ## Testing
 
 ```bash
-python3 tests/test_gwasm.py      # framing, allowlists, DNS, ranges, snapshot, proxy
-python3 tests/test_no_leaks.py   # nothing publishable-by-accident is tracked
-node    tests/test_harness.js    # Module adoption and the host surface
-node    tests/e2e.js             # the real harness in headless Chromium
+python3 -m unittest discover -s tests -p 'test_*.py'
+python3 tests/test_no_leaks.py
+node tests/test_harness.js
+node tests/e2e.js
 ```
 
 All four run offline against local fixtures — a synthetic snapshot, a stand-in

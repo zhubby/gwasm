@@ -11,6 +11,7 @@ RUN addgroup --system gwasm \
     && chown -R gwasm:gwasm /data
 
 COPY --chown=gwasm:gwasm gwasm.py README.md LICENSE /app/
+COPY --chown=gwasm:gwasm gwasm_core/ /app/gwasm_core/
 COPY --chown=gwasm:gwasm harness/ /app/harness/
 COPY --chown=gwasm:gwasm images/ /app/images/
 COPY --chown=gwasm:gwasm fonts/ /app/fonts/

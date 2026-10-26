@@ -2,8 +2,9 @@
 title: gwasm：在普通浏览器中运行 Guild Wars WebAssembly 客户端的技术实现
 ---
 
-> 研究对象：zhubby/gwasm，基于 2026-10-25 的工作树实现。
-> 本文基于源码、README.md、docs/internals.md、CLAUDE.md 和离线测试结果整理。
+> **日期快照（2026-10-25）：** 本文保留当时的研究结论，不再作为目录和
+> CI 细节的权威来源。持续维护的实现说明见
+> [docs/internals.md](internals.md)。
 
 ## 结论先行
 
@@ -14,11 +15,11 @@ ArenaNet Patch CDN
         |
         | manifest + content-addressed chunks
         v
-gwasm.py（Python 3.8+ 标准库）
+gwasm.py + gwasm_core/（Python 3.8+ 标准库）
   | HTTP 静态文件 / Range / 虚拟 Gw.snapshot
   | WebSocket -> TCP relay / DNS / Web API proxy
   v
-harness/index.html + harness.js
+harness/index.html + 按序加载的 harness-*.js
   | Module.image / socket / dns / storage / EGL / input
   v
 Emscripten glue + Gw.jspi.wasm / Gw.wasm
@@ -32,15 +33,18 @@ Emscripten glue + Gw.jspi.wasm / Gw.wasm
 
 | 路径 | 职责 |
 | --- | --- |
-| gwasm.py | 启动器、更新器、静态文件服务器、Range 服务、快照分块存储、WebSocket/TCP 中继、DNS 和 Web API 代理、浏览器生命周期 |
+| gwasm.py | 轻量 CLI、安装诊断和线程生命周期编排 |
+| gwasm_core/ | 共享 HTTP、patch/chunk、runtime 和 server 实现 |
 | harness/ | 浏览器页面和 Module 宿主实现；负责图像快照、socket、DNS、存储、EGL、输入和加载进度 |
 | gwpatch.py / getsnapshot.py | 独立的补丁协议客户端和快照下载/组装工具 |
 | gwkey.py | 从 APK 中提取公开的客户端 X-Access-Key |
 | tools/ | WebAssembly 解码、扫描、表扩容、静态 detour、符号恢复 |
 | tests/ | Python 服务器/存储测试、JavaScript harness 契约测试、浏览器 E2E、发布泄漏检查 |
-| .github/workflows/release.yml | Python 3.8/3.13、Node harness、Chromium E2E、release zip 验证和发布 |
+| .github/workflows/ci.yml | PR/main 与 release 共用的 Python、宿主、Chromium 和容器验证 |
+| .github/workflows/release.yml | 复用 CI 后打包 zip，并发布 AMD64/ARM64 容器 |
 
-一个重要的工程约束是“零依赖”：gwasm.py 可在系统 Python 上直接运行。仓库明确避免 pip install，因为 PEP 668 会让很多 Linux 发行版的系统 Python 拒绝安装包；release workflow 还会在裸解释器上执行 import gwasm。
+一个重要的工程约束是“零依赖”：gwasm.py 与相邻的 gwasm_core/ 可在系统
+Python 上直接运行，不需要 pip install；release zip 会同时包含两者。
 
 ## 2. 启动和更新流程
 
@@ -96,7 +100,7 @@ ChunkStore.read(start, length) 逐 chunk 计算覆盖范围，从内容寻址缓
 
 ### 3.2 浏览器端两级缓存和请求去重
 
-harness.js 在服务端 chunk 之上再做两级缓存：
+harness-cache.js 在服务端 chunk 之上再做两级缓存：
 
 - 内存 Map 作为 256 MiB LRU，键为 chunk index；
 - Cache API 作为跨 reload 的持久层，键中包含内容 hash，因此快照更新时不会误用旧数据。
@@ -190,12 +194,14 @@ tools/ 不依赖运行中的游戏进程，直接把 wasm 二进制当作事实�
 
 | 命令 | 覆盖内容 | 本次结果 |
 | --- | --- | --- |
-| python3 tests/test_gwasm.py | WebSocket framing、allowlist、DNS wire parser、Range、虚拟快照、代理、chunk 并发去重、预取、完整下载、Watchdog、安装检查 | 通过 |
+| python3 -m unittest discover -s tests -p 'test_*.py' | tools、patch、runtime、server 隔离和发行边界 | 通过 |
 | python3 tests/test_no_leaks.py | 阻止 .apk、.wasm、快照、manifest、依赖目录和意外 credential 进入 git | 通过，0 failure |
 | node tests/test_harness.js | Module adoption、宿主方法集合、socket 回调形状、stub/账户接口 | 通过，0 failure |
 | node tests/e2e.js | 用真实 harness + 本地合成快照 + 本地 TCP fixture 驱动浏览器 | 通过，包含真实 WebAssembly 编译检查 |
 
-release workflow 还执行两种 Python 版本（3.8 和 3.13）、裸解释器导入、无泄漏检查、浏览器 E2E，然后从 checkout 只打包 gwasm.py、harness/、images/、fonts/、README 和 LICENSE；最后解压 release zip 再运行 gwasm.py --help 并检查关键文件，避免“源码目录可运行、发布包不可运行”。
+release workflow 复用 PR/main 的完整 CI，然后从 checkout 打包 gwasm.py、
+gwasm_core/、harness/、images/、fonts/、README 和 LICENSE；最后解压 zip
+再运行 gwasm.py --help 并检查核心模块和全部宿主脚本。
 
 ## 8. 当前限制与工程风险
 

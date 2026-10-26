@@ -1,0 +1,118 @@
+name: gwasm CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+    inputs:
+      checkout_ref:
+        description: Git ref to validate
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python ${{ matrix.python }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.8', '3.13']
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.checkout_ref }}
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.6.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Compile on a bare interpreter
+        run: python3 -m py_compile gwasm.py gwpatch.py getsnapshot.py gwasm_core/*.py
+      - name: Python tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+      - name: Release policy
+        run: python3 tests/test_no_leaks.py
+
+  host:
+    name: Browser host contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.checkout_ref }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+      - run: node tests/test_harness.js
+
+  e2e:
+    name: Chromium end-to-end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.checkout_ref }}
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.6.0
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+      - name: Install pinned Chromium
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node node_modules/playwright/cli.js install --with-deps chromium
+      - run: node tests/e2e.js
+
+  container:
+    name: Container smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.checkout_ref }}
+      - name: Build runtime image
+        run: docker build --tag gwasm:ci .
+      - name: Verify help, policy and persistent runtime
+        run: |
+          set -eu
+          docker run --rm gwasm:ci --help >/dev/null
+          docker volume create gwasm-ci-data >/dev/null
+          trap 'docker rm -f gwasm-ci >/dev/null 2>&1 || true; docker volume rm gwasm-ci-data >/dev/null 2>&1 || true' EXIT
+          docker run --detach --name gwasm-ci \
+            --mount source=gwasm-ci-data,target=/data \
+            --publish 127.0.0.1:8080:8080 \
+            gwasm:ci \
+            --no-browser --bind 0.0.0.0 --port 8080 \
+            --cache /data/cache --dir /data/dist \
+            --origin http://127.0.0.1:8080 --offline --no-update
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8080/ >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:8080/progress.json >/dev/null
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            -H 'Origin: http://evil.example:8080' \
+            -H 'Upgrade: websocket' -H 'Connection: Upgrade' \
+            'http://127.0.0.1:8080/?dest=8.8.8.8:6112')" = 403
+          test "$(docker inspect --format '{{.Config.User}}' gwasm-ci)" = gwasm
+          docker exec gwasm-ci test -f /app/gwasm_core/server.py
+          docker exec gwasm-ci test -f /app/harness/harness-boot.js
+          docker exec gwasm-ci touch /data/cache/persistence-marker
+          docker rm --force gwasm-ci >/dev/null
+
+          docker run --detach --name gwasm-ci \
+            --mount source=gwasm-ci-data,target=/data \
+            gwasm:ci \
+            --no-browser --bind 0.0.0.0 --port 8080 \
+            --cache /data/cache --dir /data/dist \
+            --origin http://127.0.0.1:8080 --offline --no-update
+          docker exec gwasm-ci test -f /data/cache/persistence-marker
+
+          found="$(docker run --rm --entrypoint sh gwasm:ci -c 'find /app /data -type f \( -name "*.wasm" -o -name "*.apk" -o -name "*.key" \) -print')"
+          test -z "$found"

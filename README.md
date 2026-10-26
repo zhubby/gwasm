@@ -63,6 +63,10 @@ login. You would need an account to actually play, once that exists.
    - **Windows**: double-click `gwasm.py`.
    - **macOS / Linux**: open a terminal in the folder and run `python3 gwasm.py`.
 
+The release contains `gwasm.py` plus a local `gwasm_core/` folder. There is
+still nothing to install: keep the extracted folder together and run the entry
+file directly.
+
 Your browser opens by itself, and on Windows the black command window tucks
 itself into the taskbar once it has. **Leave it running** — closing it stops
 the server, and the game with it.
@@ -217,6 +221,26 @@ the host interfaces the module expects, the WebSocket relay, snapshot read
 performance and the tests — is in **[docs/internals.md](docs/internals.md)**.
 
 `CLAUDE.md` records how the project got here and which mistakes not to repeat.
+
+The runtime is split by responsibility:
+
+- `gwasm.py` is the CLI and process-lifecycle entry point.
+- `gwasm_core/{http,patch,runtime,server}.py` contains the standard-library
+  implementation shared by the launcher and download tools.
+- `harness/harness*.js` is loaded as ordered classic scripts: foundation,
+  cache, `Module.*`, input, then boot. There is no Node build step.
+
+Run the maintained checks with:
+
+```bash
+python3 -m unittest discover -s tests -p 'test_*.py'
+python3 tests/test_no_leaks.py
+node tests/test_harness.js
+node tests/e2e.js
+```
+
+The first three need only Python and Node respectively. The E2E suite also
+needs the pinned Playwright Chromium installed by CI.
 
 ## Credits and legal
 

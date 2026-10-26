@@ -60,6 +60,10 @@
 
 <div id="log"></div>
 
-<!-- loading.js first: it must paint before harness.js starts waiting. -->
+<!-- Ordered classic scripts: Module remains a shared top-level var. -->
 <script src="loading.js"></script>
 <script src="harness.js"></script>
+<script src="harness-cache.js"></script>
+<script src="harness-module.js"></script>
+<script src="harness-input.js"></script>
+<script src="harness-boot.js"></script>

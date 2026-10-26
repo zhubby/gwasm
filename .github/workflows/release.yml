@@ -1,14 +1,3 @@
-# Validate and package an existing GitHub Release when it is published.
-#
-# The whole suite runs first, and no package or container image is published
-# unless it passes. That includes tests/test_no_leaks.py, which is the guard
-# against shipping an ArenaNet binary or a credential by accident -- packaging
-# a release is exactly the moment that guard matters most.
-#
-# The artifact is a ready-to-run folder, not the source tree: someone
-# downloading a release should be able to unzip it and double-click gwasm.py
-# without wondering which of tests/, tools/ or docs/ they need.
-
 name: gwasm Release
 
 on:
@@ -18,132 +7,23 @@ on:
 permissions:
   contents: read
 
-# Serialised rather than cancelled: two runs publishing at once would race for
-# the same tag, and a superseded run has usually already done its testing.
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
-  test:
-    name: Tests (Python ${{ matrix.python }})
-    runs-on: ubuntu-22.04     # 22.04 still provides a 3.8 toolchain
-    strategy:
-      fail-fast: false
-      matrix:
-        # The floor the README promises, and a current release. Anything that
-        # only works on one of them is a bug in the claim or in the code.
-        python: ['3.8', '3.13']
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          ref: ${{ github.event.release.tag_name }}
-
-      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.6.0
-        with:
-          python-version: ${{ matrix.python }}
-
-      - name: Import on a bare interpreter
-        # No pip step anywhere in this workflow, deliberately: if gwasm.py ever
-        # grows a dependency, this is where it should fail.
-        run: python3 -c "import gwasm; print(gwasm.__doc__.splitlines()[0])"
-
-      - run: python3 tests/test_gwasm.py
-      - run: python3 tests/test_no_leaks.py
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: '20'
-      - run: node tests/test_harness.js
-
-  e2e:
-    name: Browser end-to-end
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          ref: ${{ github.event.release.tag_name }}
-      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.6.0
-        with:
-          python-version: '3.13'
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: '20'
-
-      - name: Install a browser
-        run: |
-          npm ci --ignore-scripts --no-audit --no-fund
-          node node_modules/playwright/cli.js install --with-deps chromium
-
-      # Drives the real harness against local fixtures. It reaches nothing of
-      # ArenaNet's: gwasm.py is spawned with --offline --no-update.
-      - run: node tests/e2e.js
-
-  container:
-    name: Container smoke test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          ref: ${{ github.event.release.tag_name }}
-
-      - name: Build runtime image
-        run: docker build --tag gwasm:ci .
-
-      - name: Start offline container
-        run: |
-          set -eu
-          docker volume create gwasm-smoke-data >/dev/null
-          trap 'docker rm -f gwasm-smoke >/dev/null 2>&1 || true; docker volume rm gwasm-smoke-data >/dev/null 2>&1 || true' EXIT
-          docker run --detach --name gwasm-smoke \
-            --mount source=gwasm-smoke-data,target=/data \
-            --publish 127.0.0.1:8080:8080 \
-            gwasm:ci \
-            --no-browser --bind 0.0.0.0 --port 8080 \
-            --cache /data/cache --dir /data/dist \
-            --origin http://127.0.0.1:8080 --offline --no-update
-
-          for _ in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:8080/ >/dev/null; then
-              break
-            fi
-            sleep 1
-          done
-          curl --fail --silent http://127.0.0.1:8080/progress.json >/dev/null
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
-            -H 'Origin: http://evil.example:8080' \
-            -H 'Upgrade: websocket' -H 'Connection: Upgrade' \
-            'http://127.0.0.1:8080/?dest=8.8.8.8:6112')" = 403
-          test "$(docker inspect --format '{{.Config.User}}' gwasm-smoke)" = gwasm
-          docker exec gwasm-smoke sh -c 'touch /data/cache/persistence-marker'
-          docker rm --force gwasm-smoke >/dev/null
-
-          docker run --detach --name gwasm-smoke \
-            --mount source=gwasm-smoke-data,target=/data \
-            --publish 127.0.0.1:8080:8080 \
-            gwasm:ci \
-            --no-browser --bind 0.0.0.0 --port 8080 \
-            --cache /data/cache --dir /data/dist \
-            --origin http://127.0.0.1:8080 --offline --no-update
-          for _ in $(seq 1 30); do
-            if docker exec gwasm-smoke test -f /data/cache/persistence-marker; then
-              break
-            fi
-            sleep 1
-          done
-          docker exec gwasm-smoke test -f /data/cache/persistence-marker
-
-      - name: Check image excludes game artifacts
-        run: |
-          test -z "$(docker run --rm --entrypoint sh gwasm:ci -c \
-            'find /app /data -type f \( -name "*.wasm" -o -name "*.apk" -o -name "*.key" \) -print')"
+  verify:
+    name: Full validation
+    uses: ./.github/workflows/ci.yml
+    with:
+      checkout_ref: ${{ github.event.release.tag_name }}
 
   release:
     name: Publish
-    needs: [test, e2e, container]
+    needs: verify
     permissions:
-      contents: write      # required to upload the package to the release
-      packages: write      # required to publish the runtime image to GHCR
+      contents: write
+      packages: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -173,29 +53,44 @@ jobs:
           set -eu
           name="gwasm-${{ steps.v.outputs.tag }}"
           mkdir -p "dist-release/$name"
-          # Exactly what running the game needs. Not tests/, tools/, docs/ or
-          # CLAUDE.md -- those are for working on it, and are on GitHub anyway.
           cp gwasm.py README.md LICENSE "dist-release/$name/"
-          cp -r harness images fonts "dist-release/$name/"
+          cp -r gwasm_core harness images fonts "dist-release/$name/"
           chmod +x "dist-release/$name/gwasm.py"
           (cd dist-release && zip -qr "$name.zip" "$name")
           echo "ZIP=dist-release/$name.zip" >> "$GITHUB_ENV"
 
-      - name: Check the package actually runs
-        # Cheap, but it catches the failure that matters: a release that is
-        # missing a file it needs. Verified from a copy, not the repo, so a
-        # path that only resolves in the checkout is caught here.
+      - name: Check the extracted package
         run: |
           set -eu
           work="$(mktemp -d)"
           unzip -q "$ZIP" -d "$work"
           cd "$work"/gwasm-*
-          python3 gwasm.py --help > /dev/null
-          for f in gwasm.py harness/index.html harness/harness.js harness/loading.js \
-                   harness/favicon.ico images/logo.webp fonts/Fremont.woff LICENSE; do
-            test -f "$f" || { echo "missing from the release: $f"; exit 1; }
+          python3 gwasm.py --help >/dev/null
+          required_files="
+          gwasm.py
+          gwasm_core/__init__.py
+          gwasm_core/http.py
+          gwasm_core/patch.py
+          gwasm_core/runtime.py
+          gwasm_core/server.py
+          harness/index.html
+          harness/loading.js
+          harness/harness.js
+          harness/harness-cache.js
+          harness/harness-module.js
+          harness/harness-input.js
+          harness/harness-boot.js
+          harness/favicon.ico
+          images/logo.webp
+          fonts/Fremont.woff
+          LICENSE
+          "
+          for file in $required_files; do
+            test -f "$file" || {
+              echo "missing from the release: $file"
+              exit 1
+            }
           done
-          echo "package looks runnable"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
@@ -233,21 +128,16 @@ jobs:
             for platform in linux/amd64 linux/arm64; do
               os="${platform%/*}"
               architecture="${platform#*/}"
-              if ! jq -e --arg os "$os" --arg architecture "$architecture" \
-                'any(.manifests[]?; .platform.os == $os and .platform.architecture == $architecture)' \
-                <<< "$manifest" >/dev/null; then
+              if ! jq -e --arg os "$os" --arg architecture "$architecture" 'any(.manifests[]?; .platform.os == $os and .platform.architecture == $architecture)' <<< "$manifest" >/dev/null; then
                 echo "::error::$IMAGE:$tag does not contain $platform"
                 exit 1
               fi
             done
           done
-
           docker run --rm --platform linux/amd64 "$IMAGE:$RELEASE_TAG" --help >/dev/null
           docker run --rm --platform linux/arm64 "$IMAGE:$RELEASE_TAG" --help >/dev/null
 
       - name: Upload package to release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -eu
-          gh release upload "${{ steps.v.outputs.tag }}" "$ZIP" --clobber
+        run: gh release upload "${{ steps.v.outputs.tag }}" "$ZIP" --clobber

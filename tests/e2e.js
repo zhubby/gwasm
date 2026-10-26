@@ -514,7 +514,7 @@ function waitFor(pred, timeout = 20000) {
     // Checked at the source, since the run above has already written
     // localStorage and can no longer observe a first-visit default.
     const harnessSrc = fs.readFileSync(
-      path.join(REPO, 'harness', 'harness.js'), 'utf8');
+      path.join(REPO, 'harness', 'harness-input.js'), 'utf8');
     const defaultMode = (harnessSrc.match(
       /localStorage\.getItem\('gwasm\.touchMode'\)\s*\|\|\s*'(\w+)'/) || [])[1];
     check('dbltap is the default mode', defaultMode === 'dbltap', defaultMode);

@@ -16,8 +16,14 @@ const vm = require('vm');
 const fs = require('fs');
 const path = require('path');
 
-const harness = fs.readFileSync(
-  path.join(__dirname, '..', 'harness', 'harness.js'), 'utf8');
+const harnessDir = path.join(__dirname, '..', 'harness');
+const html = fs.readFileSync(path.join(harnessDir, 'index.html'), 'utf8');
+const hostFiles = [...html.matchAll(/<script src="(harness(?:-[^"]+)?\.js)"><\/script>/g)]
+  .map((match) => match[1]);
+const hostScripts = hostFiles.map((file) => ({
+  file,
+  source: fs.readFileSync(path.join(harnessDir, file), 'utf8'),
+}));
 const contract = JSON.parse(fs.readFileSync(
   path.join(__dirname, '..', 'docs', 'host-contract.json'), 'utf8'));
 
@@ -56,7 +62,11 @@ function makeCtx() {
     navigator: { userAgent: 'node-test', maxTouchPoints: 0, storage: undefined },
     // The relay is same-origin now, so socket.connect builds its URL from
     // location.host rather than a configured port.
-    location: { host: '127.0.0.1:8080', origin: 'http://127.0.0.1:8080' },
+    location: {
+      host: '127.0.0.1:8080', hostname: '127.0.0.1', port: '8080',
+      origin: 'http://127.0.0.1:8080', href: 'http://127.0.0.1:8080/',
+      protocol: 'http:',
+    },
     localStorage: {
       _v: new Map(),
       getItem(k) { return this._v.has(k) ? this._v.get(k) : null; },
@@ -70,11 +80,13 @@ function makeCtx() {
   });
 }
 
-function trial(script) {
+function trial(scripts) {
   const ctx = makeCtx();
   try {
-    vm.runInContext(script, ctx);   // <script> #1: harness
-    vm.runInContext(GLUE, ctx);     // <script> #2: Gw.js
+    for (const script of scripts) {
+      vm.runInContext(script.source, ctx, { filename: script.file });
+    }
+    vm.runInContext(GLUE, ctx);     // final script: Gw.js
     return ctx.__adopted || null;
   } catch (e) {
     return null;
@@ -87,7 +99,13 @@ const check = (name, cond) => {
   console.log(`  ${cond ? 'PASS' : 'FAIL'}  ${name}`);
 };
 
-const m = trial(harness);
+check('HTML loads all five host layers in order',
+      hostFiles.join(',') === [
+        'harness.js', 'harness-cache.js', 'harness-module.js',
+        'harness-input.js', 'harness-boot.js',
+      ].join(','));
+
+const m = trial(hostScripts);
 // Assert the glue got OUR object, not a fresh {} of its own -- the handshake
 // silently falls back to {} when it cannot see ours, which looks like success.
 check('glue adopts the harness Module', !!m && typeof m.image === 'object');
@@ -96,8 +114,14 @@ check('glue adopts the harness Module', !!m && typeof m.image === 'object');
 // proves nothing. Two ways this fails depending on scope: at top level the
 // glue's `var Module` collides and Gw.js dies at parse time; inside the IIFE
 // it is merely invisible and the glue builds its own empty {}.
-const broken = trial(
-  harness.replace(/^var Module;/m, '').replace(/^Module = \{/m, 'const Module = {'));
+const broken = trial(hostScripts.map((script) => ({
+  ...script,
+  source: script.file === 'harness.js'
+    ? script.source.replace(/^var Module;/m, '')
+    : script.file === 'harness-module.js'
+      ? script.source.replace(/^Module = \{/m, 'const Module = {')
+      : script.source,
+})));
 check('lexically-declared Module does not reach the glue',
       !broken || typeof broken.image !== 'object');
 

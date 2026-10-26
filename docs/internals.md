@@ -35,8 +35,12 @@ real GPU does is unknown.
 
 | | |
 |---|---|
-| `gwasm.py` | the whole runtime: downloads, serves, relays, opens a browser |
-| `harness/` | the page it serves; supplies the `Module.*` services |
+| `gwasm.py` | CLI, installation diagnostics and thread lifecycle |
+| `gwasm_core/http.py` | pooled standard-library HTTP shared by every downloader |
+| `gwasm_core/patch.py` | manifests, chunk cache, updates and snapshot reads |
+| `gwasm_core/runtime.py` | progress, watchdog and asset publication |
+| `gwasm_core/server.py` | per-server context, HTTP/Range, proxy, DNS and relay |
+| `harness/` | ordered classic scripts supplying the `Module.*` services |
 | `images/`, `fonts/` | loading-screen art and typeface |
 | `gwkey.py` | extracts the client's access key from an APK |
 | `gwpatch.py` | the patch protocol, standalone |
@@ -234,9 +238,10 @@ it announces itself loudly at startup and is not for ordinary use.
 
 The repository includes a runtime `Dockerfile`, `compose.yaml` and
 `.env.example` for a single-user private LAN deployment. The image contains
-only `gwasm.py` and the static harness assets; it has no Node, Playwright or game
-binaries. Compose runs with `--no-browser`, binds the service to the container
-interface, and passes the explicit LAN URL as `--origin`.
+`gwasm.py`, its local `gwasm_core/` package and the static harness assets;
+it has no Node, Playwright or game binaries. Compose runs with `--no-browser`,
+binds the service to the container interface, and passes the explicit LAN URL
+as `--origin`.
 
 `/data/cache` must remain on a persistent volume because it can grow to about
 4.2 GB with `--image`. The host browser still supplies the display and GPU;
@@ -253,18 +258,21 @@ someone's machine. `e2e.js` asserts it.
 
 ## CI
 
-`.github/workflows/release.yml` runs only when a GitHub Release is published.
-It checks out that release's tag, runs the suite, and, if it passes, attaches a
-zip of `gwasm.py`, `harness/`, `images/`, `fonts/`, the README and the licence --
-what someone needs to run it, without `tests/`, `tools/` or `docs/`. Ordinary
-pushes to `main` do not package or publish anything.
+`.github/workflows/ci.yml` runs on pull requests and pushes to `main`, and is
+also callable by the release workflow. It runs Python 3.8/3.13 tests and leak
+checks, the browser host contract, pinned-Chromium E2E and a container smoke
+test. PR/main runs never package or publish anything.
+
+`.github/workflows/release.yml` calls the same validation for the release tag.
+Only after it passes does the workflow attach a zip of `gwasm.py`,
+`gwasm_core/`, `harness/`, `images/`, `fonts/`, the README and the licence.
 
 Three things it is doing deliberately:
 
 - **`test_no_leaks.py` gates the release artifacts.** Uploading them is exactly
   the moment that guard matters, since an asset turns a mistake into a download.
-- **No `pip install` anywhere**, and a bare `import gwasm` on a clean interpreter.
-  If the zero-dependency property is ever lost, that step is where it breaks.
+- **No `pip install` anywhere.** Compilation and tests run on clean
+  interpreters, so losing the zero-dependency property fails immediately.
 - **Python 3.8 and 3.13**, because the README promises 3.8 and an untested
   floor is a guess.
 
@@ -281,11 +289,15 @@ successful.
 ## Tests
 
 ```bash
-python3 tests/test_gwasm.py      # framing, allowlists, DNS, ranges, snapshot, proxy
-python3 tests/test_no_leaks.py   # nothing publishable-by-accident is tracked
-node    tests/test_harness.js    # Module adoption and the host surface
-node    tests/e2e.js             # the real harness in headless Chromium
+python3 -m unittest discover -s tests -p 'test_*.py'
+python3 tests/test_no_leaks.py
+node tests/test_harness.js
+node tests/e2e.js
 ```
+
+The Python discovery suite is split into `test_tools.py`, `test_patch.py`,
+`test_runtime.py` and `test_server.py`. The server tests run two differently
+configured instances concurrently to catch accidental shared state.
 
 Everything runs offline against local fixtures — a synthetic snapshot, a
 stand-in TCP server, and a mock glue that drives `Module.*` the way the real

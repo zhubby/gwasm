@@ -67,7 +67,29 @@ BRAND_MARKERS = {
     "Dockerfile": 'ENTRYPOINT ["python", "/app/gwasm.py"]',
     "compose.yaml": "  gwasm:\n",
     ".github/workflows/release.yml": 'name="gwasm-${{ steps.v.outputs.tag }}"',
+    ".github/workflows/ci.yml": "python3 -m unittest discover",
 }
+
+RUNTIME_FILES = [
+    "gwasm.py",
+    "gwasm_core/__init__.py",
+    "gwasm_core/http.py",
+    "gwasm_core/patch.py",
+    "gwasm_core/runtime.py",
+    "gwasm_core/server.py",
+    "harness/index.html",
+    "harness/harness.js",
+    "harness/harness-cache.js",
+    "harness/harness-module.js",
+    "harness/harness-input.js",
+    "harness/harness-boot.js",
+]
+
+OBSOLETE_REFERENCES = ("tests/test_gwasm.py", "run.py")
+CURRENT_GUIDES = (
+    "README.md", "CLAUDE.md", "docs/internals.md", "tools/README.md",
+    ".github/workflows/ci.yml", ".github/workflows/release.yml",
+)
 
 # Known-good strings that match the patterns above but are not secrets.
 ALLOWED = {
@@ -99,6 +121,9 @@ def main():
     check("git ls-files returned something", bool(files), "not a git repo?")
     check("gwasm entry point exists", (REPO / "gwasm.py").is_file())
     check("legacy entry point is gone", not (REPO / "gw.py").exists())
+    for filename in RUNTIME_FILES:
+        check("runtime file exists: %s" % filename,
+              (REPO / filename).is_file())
 
     for pattern, why in FORBIDDEN:
         hits = [f for f in files if re.search(pattern, f, re.I)]
@@ -124,7 +149,7 @@ def main():
 
     # Include renamed files before they are staged so this guard is useful
     # while developing as well as after a commit reaches CI.
-    brand_files = list(dict.fromkeys(files + ["gwasm.py", "tests/test_gwasm.py"]))
+    brand_files = list(dict.fromkeys(files + RUNTIME_FILES))
     for pattern, why in LEGACY_BRANDING:
         hits = []
         for f in brand_files:
@@ -144,6 +169,14 @@ def main():
     for filename, marker in BRAND_MARKERS.items():
         text = (REPO / filename).read_text(errors="ignore")
         check("%s carries gwasm branding" % filename, marker in text)
+
+    for obsolete in OBSOLETE_REFERENCES:
+        hits = []
+        for filename in CURRENT_GUIDES:
+            path = REPO / filename
+            if path.is_file() and obsolete in path.read_text(errors="ignore"):
+                hits.append(filename)
+        check("no obsolete reference to %s" % obsolete, not hits, hits)
 
     failed = results.count(False)
     print("\n%d failure(s)" % failed)
