@@ -22,7 +22,7 @@ host.loadGlue = function loadGlue(candidates) {
 (async function boot() {
   if (localStorage.getItem('gwasm.log') === 'on') window.gwasmLog(true);
   if (!await window.gwasmLoading.waitForClient()) return;
-  window.gwasmLoading.set('Preparing…', null);
+  host.setLoading('Opening the local game cache…');
 
   try {
     await host.cache.openPersistent();
@@ -30,6 +30,7 @@ host.loadGlue = function loadGlue(candidates) {
     log('[warn] no Cache API; chunks will not survive reload:', error.message);
   }
 
+  host.setLoading('Preparing browser storage…');
   try {
     if (navigator.storage?.persist && !await navigator.storage.persisted()) {
       log(await navigator.storage.persist()
@@ -40,6 +41,7 @@ host.loadGlue = function loadGlue(candidates) {
     log('[warn] storage persistence check failed:', error.message);
   }
 
+  host.setLoading('Reading the game data index…', 'snapshot-chunks.json');
   try {
     const response = await fetch('snapshot-chunks.json');
     if (response.ok) {
@@ -59,7 +61,6 @@ host.loadGlue = function loadGlue(candidates) {
   const jspi = !isIOS && ('Suspending' in WebAssembly);
   log(`build: ${jspi ? 'JSPI' : 'Asyncify'}` +
       (isIOS ? ' (iOS)' : jspi ? '' : ' (no WebAssembly.Suspending)'));
-  window.gwasmLoading.set('Starting the game…', null);
   host.loadGlue(jspi ? ['Gw.jspi.js', 'Gw.js'] : ['Gw.js', 'Gw.jspi.js']);
 })();
 

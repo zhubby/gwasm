@@ -615,6 +615,29 @@ function waitFor(pred, timeout = 20000) {
     check('no page errors', pageErrors.length === 0, pageErrors.join('; '));
     check('mock glue ran to completion', finished, consoleLines.slice(-6).join(' | '));
 
+    const detailedStages = [
+      'Opening the local game cache…',
+      'Preparing browser storage…',
+      'Reading the game data index…',
+      'Loading the game engine…',
+      'Downloading and compiling WebAssembly…',
+      'Initializing the game runtime…',
+      'Opening game data…',
+      'Finding game servers…',
+      'Connecting to a game server…',
+      'Connected to a game server…',
+    ];
+    let stageOffset = 0;
+    const missingStage = detailedStages.find((stage) => {
+      const next = consoleLines.findIndex(
+        (line, index) => index >= stageOffset && line.includes(`[loading] ${stage}`));
+      if (next < 0) return true;
+      stageOffset = next + 1;
+      return false;
+    });
+    check('host startup reports detailed loading stages in order', !missingStage,
+          missingStage || consoleLines.filter((line) => line.includes('[loading]')).join(' | '));
+
     if (!e2e) {
       check('e2e state present', false, 'window.__e2e missing');
     } else {
@@ -630,7 +653,7 @@ function waitFor(pred, timeout = 20000) {
       check('no errors in glue', e2e.errors.length === 0, e2e.errors.join('; '));
 
       // If both compiler paths fail, the loading overlay must report it rather
-      // than leaving the user on "Starting the game..." forever.
+      // than leaving the user on an indeterminate engine-loading stage forever.
       const wasmFailureMessage = await page.evaluate(async () => {
         const streaming = WebAssembly.instantiateStreaming;
         const instantiate = WebAssembly.instantiate;

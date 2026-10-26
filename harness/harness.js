@@ -21,6 +21,11 @@ function log(...args) {
   }
 }
 
+function setLoading(text, detail) {
+  log('[loading]', text, detail || '');
+  window.gwasmLoading?.set(text, null, detail);
+}
+
 window.gwasmLog = (on = true) => {
   const element = document.getElementById('log');
   element.style.display = on ? 'block' : 'none';
@@ -50,13 +55,14 @@ function stub(name) {
 
 window.gwasmHost = {
   log,
+  setLoading,
   stub,
   state: { useJspi: false },
   startupLabels: {
-    connecting: 'Connecting…',
+    connecting: 'Connecting to game services…',
     downloading: 'Downloading game data…',
     decompressing: 'Decompressing…',
-    loading: 'Loading…',
+    loading: 'Loading game data…',
   },
 };
 

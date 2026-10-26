@@ -44,6 +44,7 @@ function makeCtx() {
     getContext: () => null,
   });
   const el = mkEl();
+  const loadingStates = [];
   return vm.createContext({
     document: {
       getElementById: () => el,
@@ -56,7 +57,9 @@ function makeCtx() {
     // is only interested in the Module built before that point.
     window: {
       addEventListener() {}, removeEventListener() {},
-      gwasmLoading: { set() {}, fail() {}, done() {},
+      gwasmLoading: { states: loadingStates,
+                   set(text, frac, detail) { loadingStates.push({ text, frac, detail }); },
+                   fail() {}, done() {},
                    waitForClient: () => new Promise(() => {}) },
     },
     navigator: { userAgent: 'node-test', maxTouchPoints: 0, storage: undefined },
@@ -87,7 +90,9 @@ function trial(scripts) {
       vm.runInContext(script.source, ctx, { filename: script.file });
     }
     vm.runInContext(GLUE, ctx);     // final script: Gw.js
-    return ctx.__adopted || null;
+    const adopted = ctx.__adopted || null;
+    if (adopted) adopted.__loadingStates = ctx.window.gwasmLoading.states;
+    return adopted;
   } catch (e) {
     return null;
   }
@@ -138,7 +143,14 @@ check('socket.connect() present', !!m && typeof m.socket.connect === 'function')
 // The glue assigns onopen/onclose/onmessage on whatever connect() returns,
 // and calls onmessage with the payload directly rather than an event.
 if (m) {
+  m.onRuntimeInitialized();
+  check('runtime initialization reports its loading stage',
+        m.__loadingStates.at(-1).text === 'Starting game services…');
+
   const sock = m.socket.connect('127.0.0.1:6112');
+  check('socket connection reports its loading stage',
+        m.__loadingStates.at(-1).text === 'Connecting to a game server…'
+        && m.__loadingStates.at(-1).detail === '127.0.0.1:6112');
   for (const cb of ['onopen', 'onclose', 'onmessage']) {
     check(`socket exposes ${cb}`, cb in sock);
   }

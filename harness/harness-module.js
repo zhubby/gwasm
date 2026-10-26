@@ -62,6 +62,7 @@ Module = {
   instantiateWasm(imports, success) {
     patchEgl(imports.env);
     const url = host.state.useJspi ? 'Gw.jspi.wasm' : 'Gw.wasm';
+    host.setLoading('Downloading and compiling WebAssembly…', url);
     (async () => {
       try {
         let result;
@@ -69,9 +70,11 @@ Module = {
           result = await WebAssembly.instantiateStreaming(fetch(url), imports);
         } catch (error) {
           log('[warn] streaming instantiate failed, falling back:', error.message);
+          host.setLoading('Retrying WebAssembly initialization…', url);
           result = await WebAssembly.instantiate(
             await (await fetch(url)).arrayBuffer(), imports);
         }
+        host.setLoading('Initializing the game runtime…');
         success(result.instance, result.module);
       } catch (error) {
         log('[err] wasm instantiation failed:', error.message);
@@ -95,6 +98,7 @@ Module = {
         log(`image.open ${path} -> 0 (not in the image)`);
         return 0;
       }
+      host.setLoading('Opening game data…', 'Gw.snapshot');
       const handle = this._next++;
       this._handles.set(handle, { path });
       log('image.open', path, '-> handle', handle);
@@ -139,6 +143,7 @@ Module = {
   socket: {
     connect(destination) {
       log('socket.connect', destination);
+      host.setLoading('Connecting to a game server…', destination);
       const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
       const websocket = new WebSocket(
         `${scheme}://${location.host}/?dest=${encodeURIComponent(destination)}`);
@@ -150,9 +155,15 @@ Module = {
         send: (data) => websocket.send(data),
         close: () => websocket.close(),
       };
-      websocket.onopen = () => socket.onopen && socket.onopen();
+      websocket.onopen = () => {
+        host.setLoading('Connected to a game server…', destination);
+        if (socket.onopen) socket.onopen();
+      };
       websocket.onclose = () => socket.onclose && socket.onclose();
-      websocket.onerror = () => log('socket error (is gwasm.py still running?)');
+      websocket.onerror = () => {
+        log('socket error (is gwasm.py still running?)');
+        host.setLoading('Game server connection failed…', destination);
+      };
       websocket.onmessage = (event) =>
         socket.onmessage && socket.onmessage(new Uint8Array(event.data));
       return socket;
@@ -162,6 +173,7 @@ Module = {
   dns: {
     async resolve(name) {
       log('dns.resolve', name);
+      host.setLoading('Finding game servers…', name);
       const response = await fetch(`/dns?name=${encodeURIComponent(name)}`);
       if (!response.ok) {
         throw new Error('dns lookup failed: ' + response.status);
@@ -229,13 +241,17 @@ Module = {
     .test(navigator.userAgent) || navigator.maxTouchPoints > 0,
   requestFullScreen: () => Module.canvas.requestFullscreen?.(),
   requestFullscreen: () => Module.canvas.requestFullscreen?.(),
-  onRuntimeInitialized() { log('runtime initialised'); },
+  onRuntimeInitialized() {
+    log('runtime initialised');
+    host.setLoading('Starting game services…');
+  },
 };
 
 host.appendGlue = (source, candidates) => {
   host.state.useJspi = source === 'Gw.jspi.js';
   log('loading', source,
       `(wasm: ${host.state.useJspi ? 'Gw.jspi.wasm' : 'Gw.wasm'}) ...`);
+  host.setLoading('Loading the game engine…', source);
   const script = document.createElement('script');
   script.src = source;
   script.onerror = () => {
